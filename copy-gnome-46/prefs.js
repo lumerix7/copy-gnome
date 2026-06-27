@@ -37,12 +37,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
 
         window.add(this._keybindingsPage());
-        window.add(this._generalPage());
         window.add(this._historyPage());
         window.add(this._storagePage());
-        window.add(this._popupPage());
-        window.add(this._privacyPage());
-        window.add(this._aboutPage());
+        window.add(this._uiPage());
+        window.add(this._generalPage());
     }
 
     // Debounced write of the whole merged config to the active config file. Coalesces rapid edits
@@ -304,6 +302,16 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             'journalctl --user | grep -i copy-gnome'));
         page.add(logGroup);
 
+        const privacyGroup = new Adw.PreferencesGroup({
+            title: 'Privacy',
+            description: 'Selections advertising these MIME types are skipped.',
+        });
+        privacyGroup.add(this._listRow('secretMimes', 'Secret MIME types',
+            'Comma-separated MIME names.', 'privacy'));
+        page.add(privacyGroup);
+
+        this._addAboutGroups(page);
+
         return page;
     }
 
@@ -461,10 +469,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         return page;
     }
 
-    // ---------- Popup ----------
-    _popupPage() {
+    // ---------- UI ----------
+    _uiPage() {
         const page = new Adw.PreferencesPage({
-            title: 'Popup', icon_name: 'preferences-desktop-symbolic',
+            title: 'UI', icon_name: 'preferences-desktop-symbolic',
         });
 
         const win = new Adw.PreferencesGroup({ title: 'Window' });
@@ -524,26 +532,8 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         return page;
     }
 
-    // ---------- Privacy ----------
-    _privacyPage() {
-        const page = new Adw.PreferencesPage({
-            title: 'Privacy', icon_name: 'changes-prevent-symbolic',
-        });
-        const group = new Adw.PreferencesGroup({
-            title: 'Secret MIME Hints',
-            description: 'Selections advertising these MIME types are skipped.',
-        });
-        group.add(this._listRow('secretMimes', 'Secret MIME types',
-            'Comma-separated MIME names.', 'privacy'));
-        page.add(group);
-        return page;
-    }
-
     // ---------- About (read-only) ----------
-    _aboutPage() {
-        const page = new Adw.PreferencesPage({
-            title: 'About', icon_name: 'help-about-symbolic',
-        });
+    _addAboutGroups(page) {
         const group = new Adw.PreferencesGroup({ title: 'Copy GNOME' });
 
         const md = this._readMetadataFile();
@@ -572,8 +562,6 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
         page.add(this._warningGroup('Image capture is risky on Shell 46',
             'It can destabilize the compositor. Turn it off on the General page if the session gets unstable. See WARNING.md.'));
-
-        return page;
     }
 
     _readMetadataFile() {
