@@ -38,6 +38,7 @@ DBus-service + GTK app.
 | 10 | [packaging](10-packaging.md)           | Build, pack, install, schema compile, Wayland reload               |
 | 11 | [open-questions](11-open-questions.md) | Decisions to confirm, risks                                        |
 | 12 | [cli](12-cli.md)                       | CLI + DBus interface + doctor diagnostics                          |
+| 13 | [troubleshooting](13-troubleshooting.md) | Known log noise and diagnosis notes                              |
 
 
 ## Quick answers to the brief

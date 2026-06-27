@@ -7,3 +7,4 @@
 ### Others ###
 *.swp
 *.bak
+node_modules/

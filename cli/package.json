@@ -1,0 +1,24 @@
+{
+  "name": "@clipboard/copy-gnome",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "CLI and doctor tooling for copy-gnome",
+  "bin": {
+    "copy-gnome": "./bin/copy-gnome.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node ./bin/copy-gnome.js",
+    "check": "node ./scripts/check.mjs",
+    "doctor": "node ./bin/copy-gnome.js doctor"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "yaml": "^2.9.0"
+  }
+}

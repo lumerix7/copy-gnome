@@ -1,5 +1,52 @@
 # 12 - CLI & DBus (answers "要 cli 不")
 
+## Current implementation: Node recovery CLI
+
+The current checked-in CLI lives in `cli/` as a normal npm package:
+
+```json
+{
+  "name": "@clipboard/copy-gnome",
+  "bin": {
+    "copy-gnome": "./bin/copy-gnome.js"
+  }
+}
+```
+
+Install locally:
+
+```sh
+./scripts/install-cli.sh
+```
+
+Current commands:
+
+```text
+copy-gnome status
+copy-gnome doctor [--json] [--since 30m] [--require-active]
+copy-gnome logs [--since 30m] [-n 100] [-f] [--json]
+copy-gnome enable | disable | restart
+copy-gnome extension-status
+copy-gnome paths [--json]
+copy-gnome repair [--file PATH] [--yes] [--json]
+copy-gnome --completion bash
+```
+
+Design boundary: this CLI does **not** import GJS, GNOME Shell modules, or extension
+runtime code. It uses Node plus stable external commands (`gnome-extensions`,
+`gsettings`, `journalctl`) and filesystem checks, so the rescue commands remain useful
+when the Shell extension is disabled, absent, or broken. Future in-memory history actions
+(`list`, `use`, `popup`) still need an IPC service; those are covered by the DBus/socket
+design below.
+
+`scripts/install-cli.sh` installs bash completion to
+`${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/copy-gnome` by running
+`copy-gnome --completion bash`. Completion covers top-level commands, command options, and
+file completion for `repair --file`.
+
+Known GNOME Shell log noise, including Ubuntu Dock keybinding warnings, is documented in
+[13-troubleshooting](13-troubleshooting.md).
+
 ## IPC choice: DBus vs unix socket (decide-later)
 
 The CLI can't read history directly (it lives inside `gnome-shell`), so it needs an IPC
