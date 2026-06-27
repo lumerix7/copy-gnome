@@ -25,9 +25,9 @@ const DEFAULT_UI = {
 };
 
 // Keyboard hint shown per row, matching the number quick-paste keys (1..N, 0 for the 10th).
+// Hint shows the real row number (1..N). Pressing standalone `0` still selects row 10 — that
+// key binding lives in _onNumberPickDigit and is unchanged; only this label was "0" → "10".
 function rowHint(i) {
-    if (i < 9) return `${i + 1}`;
-    if (i === 9) return '0';
     return `${i + 1}`;
 }
 
