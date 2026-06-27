@@ -75,6 +75,11 @@ export class History {
         const existing = this._byHash.get(rec.hash);
         if (existing && this._opts.dedup) {
             existing.usedAt = now;
+            // Refresh the rendered preview so improvements to how we format an entry (e.g. a
+            // file's full path vs. basename) take effect when the same content is copied again,
+            // instead of being pinned to whatever an older capture stored.
+            if (rec.preview)
+                existing.preview = rec.preview;
             this._sort();
             this._persist();
             this._onChange();
@@ -106,6 +111,17 @@ export class History {
         this._sort();
         this._persist();
         this._onChange();
+    }
+
+    /**
+     * Promote the record with this hash to the front, if present. History-only reordering;
+     * never touches the system clipboard. Returns the record or null.
+     */
+    touchByHash(hash) {
+        const rec = this._byHash.get(hash);
+        if (rec)
+            this.touch(rec);
+        return rec ?? null;
     }
 
     remove(id) {

@@ -49,8 +49,18 @@ write-back** when feasible:
 ## Capture pipeline
 
 `owner-changed` → read mimes → classify → **privacy filter** → build a candidate entry
-→ **dedup** (hash) → either move-to-front (existing) or insert-at-front (new) in
-`history.js` → mark store dirty.
+→ **dedup** (hash, when `history.dedup` is on) → either move-to-front (existing) or
+insert-at-front (new) in `history.js` → mark store dirty.
+
+A file copy emits **two** `owner-changed` events: first carrying
+`text/uri-list`/`x-special` (stored as a **file** entry whose `preview` is the full
+`file://...` URI), then a follow-up exposing only `text/plain` — the **bare path**, no
+scheme (stored as a normal **text** entry, so the path can be pasted into editors). Both
+are kept; they are not merged, since the user may want either representation. When the
+second event arrives within a short window (`FILE_ECHO_TTL_MS`, 3 s) and matches the
+just-captured file's path, the file entry is promoted back to the front so it stays
+**above** its later text twin. This recognition + reordering is history-only and **never
+writes the clipboard** (the system already holds the real targets).
 
 Non-text clipboard capture is enabled by default in the current test build. On GNOME
 Shell 46 Wayland, screenshot tools can place transient image data on the clipboard, and
@@ -75,8 +85,12 @@ const cb = St.Clipboard.get_default();
 cb.set_content(St.ClipboardType.CLIPBOARD, mimetype, bytes);   // or set_text() for plain text
 ```
 
-For file entries, set `text/uri-list` (+ `x-special/gnome-copied-files` with the
-`copy\n<uri>` payload so file managers accept a paste).
+For file entries, the current build sets **`text/uri-list` only** (Nautilus and many file
+managers accept it for a paste). Offering `x-special/gnome-copied-files` (the
+`copy\n<uri>` payload) and `text/plain` *together* — so every file manager pastes the file
+and editors paste the path from the same entry — requires a multi-mime
+`Meta.SelectionSource` (`St.Clipboard.set_content` sets only one mime and replaces on each
+call). That is a planned enhancement, not yet implemented.
 
 
 ## Auto-paste (optional)

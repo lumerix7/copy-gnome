@@ -5,6 +5,7 @@
 }
 
 .cg-popup {
+    font-family: "Noto Sans Mono CJK SC", "Liberation Mono", "DejaVu Sans Mono", monospace;
     background-color: rgba(30, 30, 30, 0.96);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 12px;
@@ -51,6 +52,12 @@
 
 .cg-row-box {
     spacing: 6px;
+}
+
+/* Set the font explicitly on the preview too: a reconfigured clutter_text (single-line +
+   ellipsize) does not reliably inherit .cg-popup's font-family. */
+.cg-preview {
+    font-family: "Noto Sans Mono CJK SC", "Liberation Mono", "DejaVu Sans Mono", monospace;
 }
 
 .cg-num {

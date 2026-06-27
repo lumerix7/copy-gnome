@@ -26,6 +26,10 @@ Ordering key: `usedAt` desc.
   normalized URI; for images: raw image bytes).
 - `dedup: true` (default) merges identical content. If a near-identical text differs by
   trailing whitespace, it's still a different hash - acceptable for v1.
+- With `dedup: false`, re-copying the same content keeps a new entry each time.
+- A file copy is intentionally **not** merged with its later `text/plain` path twin (their
+  hashes differ): both entries are kept, and the file entry is promoted back above the twin
+  within a 3 s window. See [03](03-clipboard.md#capture-pipeline).
 
 ## Eviction
 

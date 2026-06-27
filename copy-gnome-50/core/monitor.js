@@ -17,12 +17,48 @@ import * as Clipboard from './clipboard.js';
 // hash matches is swallowed so our own writes don't re-enter the history.
 
 const EXPECT_TTL_MS = 2500;
+const FILE_ECHO_TTL_MS = 3000;
 const IMAGE_READ_FAILURE_LIMIT = 3;
 
 function supportedImageMime(mimes) {
     // Keep the Shell-side image path narrow. Screenshots on GNOME normally offer PNG;
     // other image/* targets can have provider-specific behavior and are skipped for now.
     return mimes.includes('image/png') ? 'image/png' : null;
+}
+
+// Canonical form for a uri-list: drop CRs/blank lines and trim each entry. Used as the file
+// entry's stored content and hash input; keeping it canonical also lets the later text/plain
+// twin's promotion (touchByHash) find that file entry by the same hash.
+function normalizeUriList(text) {
+    return text
+        .split('\n')
+        .map(line => line.replace(/\r$/, '').trim())
+        .filter(Boolean)
+        .join('\n');
+}
+
+// Every string form by which a file copy's follow-up text/plain owner-changed can refer to
+// the same files: each file:// URI, each decoded bare path (GTK's text/plain fallback is
+// the plain path, e.g. /home/u/x), and the newline-join of the bare paths for multi-file
+// copies. Used to recognize that a text capture is a file copy's twin.
+function fileEchoKeys(uriListText) {
+    const keys = new Set();
+    const paths = [];
+    for (const line of uriListText.split('\n').map(l => l.trim()).filter(Boolean)) {
+        keys.add(line);
+        if (line.startsWith('file://')) {
+            try {
+                const p = decodeURIComponent(line.replace(/^file:\/\//, ''));
+                keys.add(p);
+                paths.push(p);
+            } catch (e) {
+                // Malformed percent-encoding: the URI form above is still a usable key.
+            }
+        }
+    }
+    if (paths.length > 1)
+        keys.add(paths.join('\n'));
+    return keys;
 }
 
 export class Monitor {
@@ -39,6 +75,8 @@ export class Monitor {
         this._selection = null;
         this._ownerChangedId = 0;
         this._expected = new Map();   // hash -> GLib source id (timeout)
+        this._fileEcho = new Map();   // file path/uri string -> GLib source id (timeout)
+        this._fileEchoUri = new Map(); // same key -> the file copy's uri-list (for promotion)
         this._reading = false;
         this._pendingSource = null;
         this._imageReadFailures = 0;
@@ -81,6 +119,15 @@ export class Monitor {
             }
         }
         this._expected.clear();
+        for (const id of this._fileEcho.values()) {
+            try {
+                GLib.Source.remove(id);
+            } catch (e) {
+                log.debug(`file echo timer cleanup failed: ${e.message}`);
+            }
+        }
+        this._fileEcho.clear();
+        this._fileEchoUri.clear();
     }
 
     /** Mark a hash as self-induced so the resulting capture is ignored. */
@@ -100,6 +147,32 @@ export class Monitor {
         GLib.Source.remove(this._expected.get(hash));
         this._expected.delete(hash);
         return true;
+    }
+
+    /** Remember, for FILE_ECHO_TTL_MS, that a file copy's text/plain twin may follow. */
+    _armFileEcho(uriListText) {
+        for (const key of fileEchoKeys(uriListText)) {
+            if (this._fileEcho.has(key))
+                GLib.Source.remove(this._fileEcho.get(key));
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FILE_ECHO_TTL_MS, () => {
+                this._fileEcho.delete(key);
+                this._fileEchoUri.delete(key);
+                return GLib.SOURCE_REMOVE;
+            });
+            this._fileEcho.set(key, id);
+            this._fileEchoUri.set(key, uriListText);
+        }
+    }
+
+    /** @returns {string|null} the file copy's uri-list if `text` is its twin, else null. */
+    _fileEchoMatch(text) {
+        return this._fileEchoUri.get(text.trim()) ?? null;
+    }
+
+    /** Capture a file uri-list, arming the echo window so its text/plain twin is recognized. */
+    _captureFile(text) {
+        this._armFileEcho(text);
+        this._onCapture({ kind: 'file', mime: 'text/uri-list', text });
     }
 
     _onOwnerChanged(selType, source) {
@@ -169,9 +242,9 @@ export class Monitor {
                 }
                 const bytes = await Clipboard.getContent('text/uri-list', this._maxItemBytes());
                 if (this._stopped) return;
-                const text = bytes ? new TextDecoder().decode(bytes).trim() : null;
+                const text = bytes ? normalizeUriList(new TextDecoder().decode(bytes)) : null;
                 if (text)
-                    this._onCapture({ kind: 'file', mime: 'text/uri-list', text });
+                    this._captureFile(text);
                 return;
             }
 
@@ -183,7 +256,15 @@ export class Monitor {
                 const text = await Clipboard.getText();
                 if (this._stopped) return;
                 if (text && text.length > 0) {
-                    this._onCapture({ kind: 'text', mime: 'text/plain;charset=utf-8', text });
+                    // A file copy fires a follow-up owner-changed exposing only its text/plain
+                    // fallback (the bare path). Keep it as a normal text entry so pasting the
+                    // path into editors still works, but if it matches a just-captured file
+                    // (same path, within the echo window) tag it so that file is bumped back
+                    // above this later-arriving twin.
+                    const twinUriList = this._fileEchoMatch(text);
+                    this._onCapture(twinUriList
+                        ? { kind: 'text', mime: 'text/plain;charset=utf-8', text, promoteFileUriList: twinUriList }
+                        : { kind: 'text', mime: 'text/plain;charset=utf-8', text });
                     return;
                 }
             }

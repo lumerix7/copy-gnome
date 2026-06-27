@@ -479,7 +479,7 @@ export class Popup {
             const box = new St.BoxLayout({ style_class: 'cg-row-box', x_expand: true });
             const num = new St.Label({ text: rowHint(i), style_class: 'cg-num' });
             box.add_child(num);
-            const label = new St.Label({ text: previewLabel(rec), x_expand: true });
+            const label = new St.Label({ text: previewLabel(rec), style_class: 'cg-preview', x_expand: true });
             label.clutter_text.set_single_line_mode(true);
             label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
             box.add_child(label);

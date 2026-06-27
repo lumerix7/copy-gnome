@@ -25,9 +25,8 @@ function textPreview(text) {
 
 function filePreview(uriList) {
     const uris = uriList.split('\n').filter(Boolean);
-    const first = decodeURIComponent(uris[0] || '').replace(/^file:\/\//, '');
-    const base = first.split('/').pop() || first;
-    return uris.length > 1 ? `${base} (+${uris.length - 1} more)` : base;
+    const first = decodeURIComponent(uris[0] || '');
+    return uris.length > 1 ? `${first} (+${uris.length - 1} more)` : first;
 }
 
 export default class CopyGnomeExtension extends Extension {
@@ -241,6 +240,10 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'text', mime: c.mime, hash, encoding: 'utf8', text,
                     bytes: size, preview: textPreview(text),
                 });
+                // This text is a file copy's later-arriving text/plain twin: bump the file
+                // entry back above it so the file stays on top. History-only; no clipboard write.
+                if (c.promoteFileUriList)
+                    this._history.touchByHash(sha256Text(c.promoteFileUriList));
             } else if (c.kind === 'image') {
                 if (!cfg.general.captureImages) {
                     log.debug('skipping image capture; disabled');
