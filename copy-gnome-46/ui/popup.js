@@ -21,7 +21,7 @@ const DEFAULT_UI = {
     popupOffsetY: 0,
     popupEdgeMargin: 8,
     popupOpacity: 0.82,
-    numberPickTimeoutMs: 800,
+    numberPickTimeoutMs: 500,
 };
 
 // Keyboard hint shown per row, matching the number quick-paste keys (1..N, 0 for the 10th).

@@ -27,6 +27,7 @@ documentation, but the prefs GUI writes GSettings. See [08](08-keybindings.md).
 GSettings also stores the handful of values the Shell/prefs need before YAML is loaded
 (e.g. `storage.backend`, `enabled`) - kept minimal. Everything else lives in YAML.
 
+
 ## Paths: `COPY_GNOME_HOME` (answers brief #4 path part)
 
 Resolve in `core/paths.js`:
@@ -69,14 +70,13 @@ on startup so it's never ambiguous).
 ```yaml
 # config.yaml
 general:
-  watchPrimarySelection: false      # PRIMARY (middle-click) capture
   captureFiles: true                # copied files are stored as URI/path references only
   captureImages: true               # screenshot/image capture; risky on GNOME Shell 46
 
 history:
   maxItems: 30                      # visible history count, max 100
   maxTotalBytes: 268435456          # 256 MiB
-  maxItemBytes: 16777216            # 16 MiB; larger items skipped
+  maxItemBytes: 4194304             # 4096 KiB (4 MiB); larger items skipped
   maxAgeDays: 0                     # 0 = no age eviction
   dedup: true
 
@@ -99,7 +99,7 @@ ui:
   popupOffsetY: 0
   popupEdgeMargin: 8                # min distance from monitor edge
   popupOpacity: 0.82                # whole panel opacity, 0.1..1
-  numberPickTimeoutMs: 800          # wait for multi-digit row numbers, e.g. 1 vs 11
+  numberPickTimeoutMs: 500          # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false             # reserved; current popup uses text-only image previews
   autoPaste: true                   # ALSO inject the paste keystroke after restore.
                                     # NOTE: restore always writes the system clipboard

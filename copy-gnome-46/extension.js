@@ -72,7 +72,6 @@ export default class CopyGnomeExtension extends Extension {
             return;
         this._monitor = new Monitor({
             onCapture: c => this._onCapture(c),
-            watchPrimary: () => this._config.general.watchPrimarySelection,
             captureFiles: () => this._config.general.captureFiles,
             captureImages: () => this._config.general.captureImages,
             maxItemBytes: () => this._config.history.maxItemBytes,

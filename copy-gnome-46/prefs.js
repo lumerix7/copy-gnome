@@ -30,11 +30,15 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         window.set_search_enabled(true);
 
         // Flush any debounced write + tear down any in-progress key capture on close.
-        window.connect('close-request', () => this._flushNow());
+        window.connect('close-request', () => {
+            this._flushNow();
+            return false;
+        });
 
         window.add(this._shortcutsPage());
         window.add(this._generalPage());
         window.add(this._historyPage());
+        window.add(this._popupPage());
         window.add(this._aboutPage());
     }
 
@@ -136,7 +140,13 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         const arr = this._settings.get_strv(key);
         if (!arr || arr.length === 0)
             return 'Disabled';
-        return arr.map(a => a.replace(/</g, '').replace(/>/g, '+')).join(', ');
+        // Stored as accelerator_name ("<Super>v", lowercase key - the GNOME standard; the schema
+        // default is lowercase too). Display via accelerator_get_label, which uppercases and
+        // localizes (e.g. "<Super>v" -> "Super+V").
+        return arr.map(a => {
+            const [ok, keyval, mods] = Gtk.accelerator_parse(a);
+            return !ok || keyval === 0 ? a : Gtk.accelerator_get_label(keyval, mods);
+        }).join(', ');
     }
 
     // Grab the next key combo on the preferences window. Esc cancels; Backspace clears. Cancels
@@ -163,25 +173,26 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         this._captureCleanup = cleanup;
 
         sid = controller.connect('key-pressed', (_c, keyval, _kc, state) => {
-            if (finished) return;
+            if (finished) return true;
             const mask = state & Gtk.accelerator_get_default_mod_mask();
 
             if (keyval === Gdk.KEY_Escape) {
                 cleanup();
                 onChange();
-                return;
+                return true;
             }
             if (keyval === Gdk.KEY_BackSpace) {
                 this._settings.set_strv(key, []);
                 cleanup();
                 onChange();
-                return;
+                return true;
             }
             if (!Gtk.accelerator_valid(keyval, mask))
-                return;   // ignore bare keys; require a real combo (modifier+key)
+                return false;   // ignore bare keys; require a real combo (modifier+key)
             this._settings.set_strv(key, [Gtk.accelerator_name(keyval, mask)]);
             cleanup();
             onChange();
+            return true;
         });
 
         this._window.add_controller(controller);
@@ -194,9 +205,6 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         const group = new Adw.PreferencesGroup({ title: 'Capture' });
 
-        group.add(this._boolRow('watchPrimarySelection', 'Capture PRIMARY (middle-click)',
-            'Off by default. When on, middle-click selections are also recorded.',
-            'general'));
         group.add(this._boolRow('captureFiles', 'Capture copied files',
             'Stored as URI/path references only; no file bytes are kept.',
             'general'));
@@ -236,8 +244,8 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
         group.add(this._spinRow('maxItems', 'Max history items', 1, 100, 1,
             'history', v => v, v => Math.round(v)));
-        group.add(this._spinRow('maxItemBytes', 'Max item size (MiB)', 1, 64, 1,
-            'history', v => Math.round(v / (1024 * 1024)), v => Math.round(v) * 1024 * 1024));
+        group.add(this._spinRow('maxItemBytes', 'Max item size (KiB)', 1, 65536, 1,
+            'history', v => Math.round(v / 1024), v => Math.round(v) * 1024));
         group.add(this._spinRow('maxAgeDays', 'Expire after days (0 = never)', 0, 3650, 1,
             'history', v => v, v => Math.round(v)));
         group.add(this._boolRow('dedup', 'Deduplicate by content hash',
@@ -261,6 +269,43 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         return row;
     }
 
+    // ---------- Popup (config.json) ----------
+    _popupPage() {
+        const page = new Adw.PreferencesPage({
+            title: 'Popup', icon_name: 'preferences-desktop-symbolic',
+        });
+
+        const win = new Adw.PreferencesGroup({ title: 'Window' });
+        win.add(this._spinRow('popupWidth', 'Width (px)', 240, 900, 10,
+            'ui', v => v, v => Math.round(v)));
+        win.add(this._spinRow('popupMaxHeight', 'Max height (px)', 120, 1200, 10,
+            'ui', v => v, v => Math.round(v)));
+        win.add(this._spinRow('popupOpacity', 'Opacity (%)', 10, 100, 1,
+            'ui', v => Math.round(v * 100), v => v / 100));
+        page.add(win);
+
+        const beh = new Adw.PreferencesGroup({ title: 'Behavior' });
+        const autoPasteRow = this._boolRow('autoPaste', 'Auto-paste after restore',
+            'After setting the clipboard, also inject the paste key (Ctrl+V, or the app-specific combo). Off = set the clipboard only.', 'ui');
+        const delayRow = this._spinRow('autoPasteDelayMs', 'Auto-paste delay (ms)', 0, 5000, 1,
+            'ui', v => v, v => Math.round(v));
+        beh.add(autoPasteRow);
+        beh.add(delayRow);
+        beh.add(this._spinRow('numberPickTimeoutMs', 'Number-pick timeout (ms)', 100, 5000, 1,
+            'ui', v => v, v => Math.round(v)));
+        page.add(beh);
+
+        // Disable the delay control when auto-paste is off (the value has no effect then).
+        const apSwitch = autoPasteRow.activatable_widget;
+        if (apSwitch) {
+            const syncDelay = () => delayRow.set_sensitive(apSwitch.active);
+            apSwitch.connect('notify::active', syncDelay);
+            syncDelay();
+        }
+
+        return page;
+    }
+
     // ---------- About (read-only) ----------
     _aboutPage() {
         const page = new Adw.PreferencesPage({
@@ -268,7 +313,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         const group = new Adw.PreferencesGroup({ title: 'copy-gnome' });
 
-        const md = this.metadata ?? {};
+        const md = this._readMetadataFile();
         const shellVer = Array.isArray(md['shell-version'])
             ? md['shell-version'].join('.')
             : (md['shell-version'] ?? '?');
@@ -285,6 +330,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         const cfgStatus = status.yamlPresent ? 'config.yaml (takes precedence)'
             : (status.jsonPresent ? 'config.json' : 'defaults (no file)');
         group.add(this._infoRow('Config in use', cfgStatus));
+        group.add(this._infoRow('Logs', 'journalctl --user | grep -i copy-gnome'));
 
         page.add(group);
 
@@ -296,6 +342,19 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             'It can destabilize the compositor. Turn it off on the General page if the session gets unstable. See WARNING.md.'));
 
         return page;
+    }
+
+    _readMetadataFile() {
+        // Read metadata.json directly rather than relying on this.metadata, whose field
+        // availability varies across ExtensionPreferences versions.
+        try {
+            const path = GLib.build_filenamev([this.path, 'metadata.json']);
+            const [, contents] = Gio.File.new_for_path(path).load_contents(null);
+            return JSON.parse(new TextDecoder().decode(contents));
+        } catch (e) {
+            log.warn(`prefs: metadata.json read failed: ${e.message}`);
+            return {};
+        }
     }
 
     _infoRow(title, value) {

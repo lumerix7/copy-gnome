@@ -9,14 +9,13 @@ import { parseYaml, serializeYaml } from '../vendor/yaml.js';
 // shell.
 export const DEFAULTS = {
     general: {
-        watchPrimarySelection: false,
         captureFiles: true,
         captureImages: true,
     },
     history: {
         maxItems: 30,
         maxTotalBytes: 268435456,   // 256 MiB
-        maxItemBytes: 16777216,     // 16 MiB
+        maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 0,
         dedup: true,
     },
@@ -39,7 +38,7 @@ export const DEFAULTS = {
         popupOffsetY: 0,
         popupEdgeMargin: 8,
         popupOpacity: 0.82,
-        numberPickTimeoutMs: 800,
+        numberPickTimeoutMs: 500,
         showThumbnails: false,
         autoPaste: true,
         autoPasteDelayMs: 220,

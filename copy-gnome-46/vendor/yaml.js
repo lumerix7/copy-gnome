@@ -77,8 +77,14 @@ function parseScalar(raw) {
         return obj;
     }
 
-    if ((s.startsWith('"') && s.endsWith('"')) ||
-        (s.startsWith("'") && s.endsWith("'")))
+    if (s.startsWith('"') && s.endsWith('"')) {
+        try {
+            return JSON.parse(s);
+        } catch (e) {
+            throw new Error(`bad double-quoted string: ${s}`);
+        }
+    }
+    if (s.startsWith("'") && s.endsWith("'"))
         return s.slice(1, -1);
 
     if (s === 'true') return true;
@@ -227,10 +233,11 @@ function formatScalar(v) {
 // Quote on any doubt: strings that look like bool/number/null, or contain YAML
 // structural/control characters, or have leading/trailing whitespace.
 function quoteString(s) {
-    if (s === '') return '""';
-    if (/^(?:true|false|null|~|yes|no|on|off)$/i.test(s)) return `"${s}"`;
-    if (/^[+-]?\d/.test(s)) return `"${s}"`;
-    if (/[:#&*!|>'"%@`,\[\]{}]/.test(s)) return `"${s}"`;
-    if (/^\s|\s$/.test(s) || /[\x00-\x1f]/.test(s)) return `"${s}"`;
+    const quoted = () => JSON.stringify(s);
+    if (s === '') return quoted();
+    if (/^(?:true|false|null|~|yes|no|on|off)$/i.test(s)) return quoted();
+    if (/^[+-]?\d/.test(s)) return quoted();
+    if (/[:#&*!|>'"%@`,\[\]{}]/.test(s)) return quoted();
+    if (/^\s|\s$/.test(s) || /[\x00-\x1f]/.test(s)) return quoted();
     return s;
 }

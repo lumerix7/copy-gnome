@@ -8,13 +8,14 @@ Do **not** poll. Use Mutter's selection API, available from inside the Shell:
 const selection = global.display.get_selection();   // Meta.Selection
 this._ownerChangedId = selection.connect('owner-changed',
     (sel, selType, source) => {
-        if (selType !== Meta.SelectionType.SELECTION_CLIPBOARD) return;  // ignore PRIMARY/DND unless enabled
+        if (selType !== Meta.SelectionType.SELECTION_CLIPBOARD) return;  // only the CLIPBOARD selection
         this._onOwnerChanged(source);
     });
 ```
 
 `owner-changed` fires whenever any client takes ownership of a selection. We then read
 the new contents asynchronously.
+
 
 ### Reading contents
 
@@ -27,6 +28,7 @@ Two viable read paths:
 
 Recommended: query `source.get_mimetypes()` to decide the type, then read the *best*
 representation with `St.Clipboard.get_content()`.
+
 
 ### Mime priority
 
@@ -43,6 +45,7 @@ write-back** when feasible:
 > canonical representation + the plain-text fallback; restore those two. Full multi-mime
 > round-trip is a post-MVP nicety.
 
+
 ## Capture pipeline
 
 `owner-changed` → read mimes → classify → **privacy filter** → build a candidate entry
@@ -55,11 +58,13 @@ reading those bytes from inside Shell has been observed to crash GNOME Shell (`s
 in this extension. File capture stores URI/path references only; image capture reads
 bounded bytes and should be disabled in config if instability returns.
 
+
 ### Avoiding self-induced loops
 
 When *we* set the clipboard (write-back), that triggers `owner-changed` again. Guard
 with a short-lived flag / expected-hash so our own writes aren't re-captured as new
 entries.
+
 
 ## Write-back
 
@@ -72,6 +77,7 @@ cb.set_content(St.ClipboardType.CLIPBOARD, mimetype, bytes);   // or set_text() 
 
 For file entries, set `text/uri-list` (+ `x-special/gnome-copied-files` with the
 `copy\n<uri>` payload so file managers accept a paste).
+
 
 ## Auto-paste (optional)
 
@@ -104,6 +110,7 @@ just means the user pastes manually with their own shortcut - nothing is lost. A
 is enabled by default (`ui.autoPaste: true`) but is best-effort convenience on top of the
 guaranteed clipboard write.
 
+
 ## Clipboard persistence (survive source app exit)
 
 On Wayland, when the owning client exits, the selection is dropped. Because the Shell
@@ -111,6 +118,7 @@ can own selections, copy-gnome can **re-assert ownership** of the most recent en
 paste keeps working after the source closes. Implement by setting the clipboard to the
 top entry when the previous owner disappears (config flag, default on for text and small
 captured payloads; oversized binary payloads are skipped).
+
 
 ## Privacy & exclusions
 

@@ -5,15 +5,17 @@
 A fast, Wayland-native clipboard manager for GNOME, with a CopyQ-like feature set but
 implemented as a Shell extension so it works where standalone clipboard managers can't.
 
+
 ## Target platform
 
 - GNOME Shell **46** and **50** (both are post-GNOME-45, i.e. ESM + `Extension` class era).
 - Wayland primary; X11 should keep working (the `MetaSelection`/`St.Clipboard` paths work on both).
 - GJS ≥ 1.80 (ships with Shell 46).
 
+
 ## Core features (MVP)
 
-- **Clipboard monitoring** of `CLIPBOARD` selection (PRIMARY optional, off by default).
+- **Clipboard monitoring** of the `CLIPBOARD` selection via Mutter's `MetaSelection`.
 - **History** with most-recently-used ordering; re-copying moves an item to the top.
 - **Dedup** by content hash.
 - **Centered popup** opened by a global shortcut: searchable, keyboard-navigable list.
@@ -22,6 +24,7 @@ implemented as a Shell extension so it works where standalone clipboard managers
 - **Clipboard persistence**: keep content alive after the source app exits.
 - **Privacy**: skip password-manager / concealed entries; per-app & regex excludes.
 - **Config** in YAML (JSON accepted), with sensible defaults; optional prefs GUI.
+
 
 ## Feature set (post-MVP / planned)
 
@@ -33,6 +36,7 @@ implemented as a Shell extension so it works where standalone clipboard managers
 - Optional at-rest encryption of the on-disk store.
 - Snippets (static saved entries).
 
+
 ## Non-goals
 
 - Cross-desktop support (KDE, wlroots): out of scope - this targets GNOME Shell only.
@@ -40,6 +44,7 @@ implemented as a Shell extension so it works where standalone clipboard managers
 - Editing rich content (HTML/RTF) beyond storing & restoring it verbatim.
 - Reading another app's **text caret** position. GNOME/Wayland caret reporting proved
   unstable across apps and repeated modal grabs, so the popup is centered instead.
+
 
 ## Reference projects (for inspiration / prior art)
 
