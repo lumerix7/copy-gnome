@@ -13,7 +13,9 @@ import { log } from '../core/log.js';
 // monitor. Near-caret anchoring was removed because GNOME/Wayland caret reporting is not
 // reliable across apps or repeated modal grabs.
 
-const DOUBLE_CLICK_US = 400000;   // 400 ms
+// Always-visible keyboard/mouse cheat sheet shown under the search box. Short, English +
+// symbols. Number-pick feedback temporarily replaces it and restores it when cleared.
+const HINT_TEXT = '↑↓ move · 1-N pick · Enter/click paste · Ctrl+F search · Esc close';
 const DEFAULT_UI = {
     popupWidth: 640,
     popupMaxHeight: 800,
@@ -159,8 +161,6 @@ export class Popup {
         this._rows = [];        // [{rec, button}]
         this._selected = -1;
         this._visible = false;
-        this._lastClickIdx = -1;
-        this._lastClickTime = 0;
         this._numberPickBuffer = '';
         this._numberPickTimer = 0;
         this._targetWindow = null;
@@ -238,9 +238,9 @@ export class Popup {
         this._panel.add_child(this._entry);
 
         this._hint = new St.Label({
-            text: '',
+            text: HINT_TEXT,
             style_class: 'cg-number-hint',
-            visible: false,
+            visible: true,
             x_expand: true,
         });
         this._panel.add_child(this._hint);
@@ -476,21 +476,13 @@ export class Popup {
             box.add_child(new St.Label({ text: timeLabel(rec), style_class: 'cg-time' }));
             button.set_child(box);
 
-            // Single click selects; second click on the same row within the threshold
-            // pastes (shell idiom: `clicked` + manual timing, not get_click_count).
+            // Single click selects then pastes (shell idiom: the `clicked` signal, not
+            // get_click_count). Hover only tints the row via CSS `:hover`; it deliberately
+            // does NOT move the keyboard selection, so a mouse resting near the list can't
+            // fight arrow-key / number navigation.
             button.connect('clicked', () => {
-                const now = GLib.get_monotonic_time();
                 this._select(i);
-                if (this._lastClickIdx === i && now - this._lastClickTime < DOUBLE_CLICK_US) {
-                    this._lastClickIdx = -1;
-                    this._activate(rec);
-                } else {
-                    this._lastClickIdx = i;
-                    this._lastClickTime = now;
-                }
-            });
-            button.connect('notify::hover', () => {
-                if (button.hover) this._select(i);
+                this._activate(rec);
             });
             this._listBox.add_child(button);
             this._rows.push({ rec, button });
@@ -522,12 +514,13 @@ export class Popup {
     _showNumberHint(text, warning = false) {
         if (!this._hint)
             return;
+        // Empty text restores the always-on cheat sheet rather than hiding the row.
         if (warning)
             this._hint.add_style_class_name('cg-number-hint-warning');
         else
             this._hint.remove_style_class_name('cg-number-hint-warning');
-        this._hint.set_text(text);
-        this._hint.visible = text !== '';
+        this._hint.set_text(text === '' ? HINT_TEXT : text);
+        this._hint.visible = true;
     }
 
     _activateRow(i) {

@@ -38,7 +38,13 @@
     padding: 6px 10px;
 }
 
-.cg-row:hover,
+/* Hover is a soft tint only - it must NOT look like the keyboard selection, since
+   hovering no longer moves the selection. The .cg-selected rule below is declared last so
+   it wins (equal specificity) when a row is both hovered and selected. */
+.cg-row:hover {
+    background-color: rgba(120, 170, 255, 0.12);
+}
+
 .cg-row.cg-selected {
     background-color: rgba(120, 170, 255, 0.28);
 }
