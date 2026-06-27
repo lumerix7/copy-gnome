@@ -1,0 +1,111 @@
+/* copy-gnome popup styling. Inherits Shell light/dark theming via base colors. */
+
+.cg-backdrop {
+    background-color: transparent;
+}
+
+.cg-popup {
+    background-color: rgba(30, 30, 30, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 8px;
+    spacing: 6px;
+    box-shadow: 0 4px 18px 2px rgba(0, 0, 0, 0.5);
+}
+
+.cg-search {
+    min-width: 260px;
+    margin-bottom: 4px;
+}
+
+.cg-number-hint {
+    padding: 2px 4px;
+    opacity: 0.7;
+    font-size: 0.85em;
+}
+
+.cg-number-hint-warning {
+    color: #ffb4a8;
+    opacity: 0.95;
+}
+
+.cg-list {
+    spacing: 2px;
+}
+
+.cg-row {
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+/* Hover is a soft tint only - it must NOT look like the keyboard selection, since
+   hovering no longer moves the selection. The .cg-selected rule below is declared last so
+   it wins (equal specificity) when a row is both hovered and selected. */
+.cg-row:hover {
+    background-color: rgba(120, 170, 255, 0.12);
+}
+
+.cg-row.cg-selected {
+    background-color: rgba(120, 170, 255, 0.28);
+}
+
+.cg-row-box {
+    spacing: 6px;
+}
+
+.cg-num {
+    font-feature-settings: "tnum";
+    min-width: 1.4em;
+    opacity: 0.55;
+    font-size: 0.9em;
+}
+
+.cg-kind,
+.cg-time {
+    font-feature-settings: "tnum";
+    opacity: 0.55;
+    font-size: 0.85em;
+}
+
+/* Kinds are short ('text'/'image'/'file') and the time is a fixed 'MM-DD HH:MM'. Size the
+   columns close to their content so they stay aligned without trailing whitespace, leaving
+   the rest of the row to the (x_expand) preview label. Right-align so any residual slack
+   falls toward the preview, not on the far right edge. */
+.cg-kind {
+    min-width: 3em;
+    text-align: right;
+}
+
+.cg-time {
+    min-width: 5.4em;
+    text-align: right;
+}
+
+.cg-empty {
+    padding: 10px;
+    opacity: 0.6;
+}
+
+.cg-footer {
+    margin-top: 4px;
+    padding-top: 4px;
+}
+
+.cg-clear {
+    padding: 4px 10px;
+    border-radius: 8px;
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+.cg-clear:hover {
+    opacity: 1;
+    background-color: rgba(255, 120, 120, 0.25);
+}
+
+.cg-clear-armed,
+.cg-clear-armed:hover {
+    opacity: 1;
+    color: #ffb4a8;
+    background-color: rgba(255, 90, 90, 0.35);
+}
