@@ -49,7 +49,12 @@ export const DEFAULTS = {
   },
 };
 
-const LIMITS = {
+export const ENUMS = {
+  "storage.backend": ["jsonl", "gda"],
+  "logging.level": ["error", "warn", "info", "debug"],
+};
+
+export const LIMITS = {
   "history.maxItems": [1, 100],
   "history.maxItemBytes": [1024, 16 * 1024 * 1024],
   "history.maxAgeDays": [0, 3650],
@@ -66,6 +71,35 @@ const LIMITS = {
   "ui.numberPickTimeoutMs": [100, 5000],
   "ui.autoPasteDelayMs": [0, 5000],
 };
+
+export const CONFIG_KEYS = [
+  "general.captureFiles",
+  "general.captureImages",
+  "history.maxItems",
+  "history.maxItemBytes",
+  "history.maxAgeDays",
+  "history.dedup",
+  "storage.backend",
+  "storage.textMaxBytes",
+  "storage.binaryMaxBytes",
+  "storage.flushIntervalSec",
+  "storage.debounceMs",
+  "privacy.secretMimes",
+  "ui.popupWidth",
+  "ui.popupMaxHeight",
+  "ui.popupOffsetX",
+  "ui.popupOffsetY",
+  "ui.popupEdgeMargin",
+  "ui.popupOpacity",
+  "ui.numberPickTimeoutMs",
+  "ui.showThumbnails",
+  "ui.autoPaste",
+  "ui.autoPasteDelayMs",
+  "ui.pasteRestoresFocus",
+  "ui.terminalApps",
+  "ui.pasteOverrides",
+  "logging.level",
+];
 
 const DEPRECATED_KEYS = [
   "storage.inlineMaxBytes",
@@ -157,11 +191,11 @@ function sanitizeConfig(config, warnings) {
   for (const [field, [min, max]] of Object.entries(LIMITS))
     clampNumber(config, field, min, max, warnings);
 
-  if (!["jsonl", "gda"].includes(config.storage.backend)) {
+  if (!ENUMS["storage.backend"].includes(config.storage.backend)) {
     warnings.push(`storage.backend ${JSON.stringify(config.storage.backend)} ignored; using jsonl`);
     config.storage.backend = "jsonl";
   }
-  if (!["error", "warn", "info", "debug"].includes(config.logging.level)) {
+  if (!ENUMS["logging.level"].includes(config.logging.level)) {
     warnings.push(`logging.level ${JSON.stringify(config.logging.level)} ignored; using info`);
     config.logging.level = "info";
   }

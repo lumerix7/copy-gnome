@@ -11,6 +11,10 @@ copy-gnome doctor
 copy-gnome logs --since 30m
 copy-gnome logs -f --tail 100
 copy-gnome disable
+copy-gnome config validate
+copy-gnome config get general.captureImages
+copy-gnome config set general.captureImages false
+copy-gnome config edit
 copy-gnome repair
 copy-gnome --completion bash
 ```
@@ -27,5 +31,7 @@ Commands:
   `-n/--tail` limits the initial journal window.
 - `enable`, `disable`, `restart`, `extension-status`: wrappers around `gnome-extensions`.
 - `paths`: print the same data/config path resolution used by the extension.
+- `config path|validate|show|get|set|edit`: inspect or update `config.yaml`; writes are
+  validated and replace the file through a temporary file.
 - `repair`: dry-run by default; `--yes` backs up the clips file and truncates a bad tail line.
-- `--completion bash`: print bash completion for commands and options.
+- `--completion bash`: print bash completion for commands, options, config keys, and files.

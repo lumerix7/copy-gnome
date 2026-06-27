@@ -119,6 +119,7 @@ Try:
   $BIN_NAME status
   $BIN_NAME doctor
   $BIN_NAME logs --since 30m
+  $BIN_NAME config validate
   $BIN_NAME disable
 
 Bash completion is installed. Open a new shell, or run:

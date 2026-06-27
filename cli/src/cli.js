@@ -3,9 +3,19 @@ import fs from "node:fs";
 
 import { UUID } from "./lib/constants.js";
 import { generateCompletion } from "./lib/completion.js";
+import {
+  configPathInfo,
+  editConfig,
+  formatScalar,
+  formatYaml,
+  getConfigValue,
+  setConfigValue,
+  showConfig,
+  validateConfig,
+} from "./lib/config-command.js";
 import { repairLatestClip } from "./lib/clips.js";
 import { collectLogs, followLogs } from "./lib/logs.js";
-import { printChecks, printJson, printStatus } from "./lib/output.js";
+import { dim, error, field, formatHelp, printChecks, printJson, printStatus, success, warn } from "./lib/output.js";
 import { resolveDataPaths } from "./lib/paths.js";
 import { commandLine, resultText, run } from "./lib/shell.js";
 import { runDoctor } from "./lib/doctor.js";
@@ -16,8 +26,8 @@ export async function main(argv) {
   if (completion) {
     try {
       process.stdout.write(generateCompletion(completion));
-    } catch (error) {
-      console.error(error.message);
+    } catch (err) {
+      error(err.message);
       process.exitCode = 2;
     }
     return;
@@ -26,7 +36,7 @@ export async function main(argv) {
   const program = new Command();
   program
     .name("copy-gnome")
-    .description("CLI and recovery tooling for copy-gnome")
+    .description("CLI for the copy-gnome clipboard manager")
     .version("0.1.0")
     .option("--completion <shell>", "print a shell completion script, then exit (bash)");
 
@@ -63,14 +73,14 @@ export async function main(argv) {
     .option("--json", "print JSON")
     .action(async opts => {
       if (opts.json && opts.follow) {
-        console.error("logs --json cannot be combined with --follow");
+        error("logs --json cannot be combined with --follow");
         process.exitCode = 2;
         return;
       }
       if (opts.follow) {
         const result = await followLogs(opts);
         if (!result.ok) {
-          console.error(result.error || `journalctl exited with ${result.code ?? result.signal}`);
+          error(result.error || `journalctl exited with ${result.code ?? result.signal}`);
           process.exitCode = 1;
         }
         return;
@@ -79,7 +89,7 @@ export async function main(argv) {
       if (opts.json) {
         printJson(logs);
       } else if (!logs.ok) {
-        console.error(logs.error);
+        error(logs.error);
         process.exitCode = 1;
       } else {
         for (const line of logs.lines)
@@ -125,10 +135,112 @@ export async function main(argv) {
       if (opts.json) {
         printJson(paths);
       } else {
-        console.log(`home:   ${paths.base}${paths.usedFallback ? " (fallback)" : ""}`);
-        console.log(`config: ${paths.config}`);
-        console.log(`data:   ${paths.data}`);
+        field("home", `${paths.base}${paths.usedFallback ? dim(" (fallback)") : ""}`, { pad: 7, indent: 0 });
+        field("config", paths.config, { pad: 7, indent: 0, color: dim });
+        field("data", paths.data, { pad: 7, indent: 0, color: dim });
       }
+    });
+
+  const config = program.command("config")
+    .description("Inspect copy-gnome config");
+
+  config.command("path")
+    .description("Print the active config path")
+    .option("--json", "print JSON")
+    .action(opts => {
+      const info = configPathInfo();
+      if (opts.json) {
+        printJson(info);
+      } else {
+        console.log(info.activeFile || info.preferredYaml);
+      }
+    });
+
+  config.command("validate")
+    .description("Validate config syntax and known keys")
+    .option("--json", "print JSON")
+    .action(opts => {
+      const result = validateConfig();
+      if (opts.json) {
+        printJson(result);
+      } else {
+        if (result.ok)
+          success(`config is valid ${dim(`(${result.file || "defaults"})`)}`);
+        else
+          error(`config is invalid ${dim(`(${result.file || "defaults"})`)}`);
+        for (const warning of result.warnings)
+          warn(warning);
+        for (const message of result.errors)
+          error(message);
+      }
+      process.exitCode = result.ok ? 0 : 1;
+    });
+
+  config.command("show")
+    .description("Show the sanitized effective config")
+    .option("--json", "print JSON")
+    .option("--meta", "include file, warnings, and errors")
+    .action(opts => {
+      const value = showConfig({ withMeta: opts.meta });
+      if (opts.json)
+        printJson(value);
+      else
+        console.log(formatYaml(value));
+    });
+
+  config.command("get")
+    .description("Get one sanitized config value")
+    .argument("<key>", "config key, e.g. general.captureImages")
+    .option("--json", "print JSON")
+    .action((key, opts) => {
+      const result = getConfigValue(key);
+      if (opts.json) {
+        printJson(result);
+      } else if (result.ok) {
+        console.log(formatScalar(result.value));
+      } else {
+        error(result.error);
+      }
+      process.exitCode = result.ok ? 0 : 2;
+    });
+
+  config.command("set")
+    .description("Set one config value in config.yaml")
+    .argument("<key>", "config key, e.g. general.captureImages")
+    .argument("<value...>", "value; arrays/objects use YAML or JSON flow syntax")
+    .option("--json", "print JSON")
+    .action((key, values, opts) => {
+      const result = setConfigValue(key, values.join(" "));
+      if (opts.json) {
+        printJson(result);
+      } else if (result.ok) {
+        success(`${result.key} = ${formatScalar(result.value)}`);
+        console.log(dim(`  ${result.path}`));
+        for (const warning of result.warnings)
+          warn(warning);
+      } else {
+        error(result.error);
+      }
+      process.exitCode = result.ok ? 0 : 2;
+    });
+
+  config.command("edit")
+    .description("Edit config.yaml with --editor, $VISUAL, $EDITOR, or editor")
+    .option("--editor <command>", "editor command to run instead of $VISUAL/$EDITOR/editor")
+    .option("--json", "print JSON")
+    .action(opts => {
+      const result = editConfig(opts);
+      if (opts.json) {
+        printJson(result);
+      } else if (result.ok) {
+        success("config saved");
+        console.log(dim(`  ${result.path}`));
+        for (const warning of result.warnings)
+          warn(warning);
+      } else {
+        error(result.error);
+      }
+      process.exitCode = result.ok ? 0 : 2;
     });
 
   program.command("repair")
@@ -146,7 +258,14 @@ export async function main(argv) {
       process.exitCode = result.ok ? 0 : 1;
     });
 
+  applyHelpFormat(program);
   await program.parseAsync(argv);
+}
+
+function applyHelpFormat(cmd) {
+  cmd.configureHelp({ formatHelp });
+  for (const sub of cmd.commands)
+    applyHelpFormat(sub);
 }
 
 function completionShellFromArgv(argv) {
@@ -169,7 +288,7 @@ function runExtensionCommand(action, opts = {}) {
   process.stdout.write(r.stdout);
   process.stderr.write(r.stderr);
   if (!r.ok && !opts.allowFailure) {
-    console.error(`${commandLine("gnome-extensions", args)} failed: ${resultText(r)}`);
+    error(`${commandLine("gnome-extensions", args)} failed: ${resultText(r)}`);
     process.exitCode = 1;
   }
 }
@@ -179,20 +298,20 @@ function hardDisable(opts) {
   const src = status.extension.dir;
   const dest = `${src}.disabled`;
   if (!opts.yes) {
-    console.error(`Refusing hard disable without --yes. Would rename:\n  ${src}\n  -> ${dest}`);
+    error(`Refusing hard disable without --yes. Would rename:\n  ${src}\n  -> ${dest}`);
     process.exitCode = 2;
     return;
   }
   if (!fs.existsSync(src)) {
-    console.error(`installed extension dir not found: ${src}`);
+    error(`installed extension dir not found: ${src}`);
     process.exitCode = 1;
     return;
   }
   if (fs.existsSync(dest)) {
-    console.error(`target already exists: ${dest}`);
+    error(`target already exists: ${dest}`);
     process.exitCode = 1;
     return;
   }
   fs.renameSync(src, dest);
-  console.log(`renamed ${src} -> ${dest}`);
+  success(`renamed ${src} -> ${dest}`);
 }

@@ -6,6 +6,7 @@ standalone clipboard managers can't monitor the clipboard).
 
 > Status: **M1 + popup**, GNOME Shell **46** only. GNOME 50 comes later once 46 is stable.
 
+
 ## Features (current)
 
 - Clipboard monitoring via Mutter's `MetaSelection` (no polling) - text, copied-file
@@ -24,6 +25,7 @@ standalone clipboard managers can't monitor the clipboard).
   files, and optional capped base64 only for non-file payloads.
 - YAML config (JSON also accepted); privacy skip for password-manager selections.
 
+
 ## Install (local, GNOME 46, Wayland)
 
 ```sh
@@ -38,6 +40,7 @@ gnome-extensions enable copy-gnome@clipboard
 Then copy `config.example.yaml` to `$COPY_GNOME_HOME/config/config.yaml` if you want to
 tweak defaults (default `$COPY_GNOME_HOME` = `/opt/copy-gnome/$USER`).
 
+
 ## CLI / recovery tool
 
 ```sh
@@ -47,6 +50,9 @@ copy-gnome status
 copy-gnome doctor
 copy-gnome logs --since 30m
 copy-gnome logs -f --tail 100
+copy-gnome config validate
+copy-gnome config get general.captureImages
+copy-gnome config set general.captureImages false
 copy-gnome disable
 copy-gnome repair              # dry-run
 copy-gnome repair --yes        # backup + truncate a bad JSONL tail line
@@ -54,10 +60,11 @@ copy-gnome --completion bash   # print bash completion
 ```
 
 The CLI is a normal Node package (`@clipboard/copy-gnome`) with the `copy-gnome` binary.
-It does not import GNOME Shell or extension runtime code, so `doctor`, `logs`, `disable`,
-and `repair` remain useful when the extension is broken.
+It does not import GNOME Shell or extension runtime code, so `doctor`, `logs`, `config`,
+`disable`, and `repair` remain useful when the extension is broken.
 `scripts/install-cli.sh` installs bash completion to the user-level bash-completion
 directory when generation succeeds.
+
 
 ## Develop without logging out
 
@@ -66,14 +73,16 @@ directory when generation succeeds.
 journalctl --user -f | grep -i copy-gnome    # logs
 ```
 
+
 ## Layout
 
 - `copy-gnome-46/` - the GNOME 46 extension (live source for now).
 - `copy-gnome-50/` - placeholder for the future GNOME 50 build.
-- `cli/` - Node CLI package (`copy-gnome`) for status, doctor, logs, enable/disable,
-  and JSONL repair.
+- `cli/` - Node CLI package (`copy-gnome`) for status, doctor, logs, config inspection,
+  enable/disable, and JSONL repair.
 - `docs/` - full design (start at [docs/00-index.md](docs/00-index.md)).
 - `scripts/` - install / uninstall / dev / setup-home.
+
 
 ## Uninstall
 

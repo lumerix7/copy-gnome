@@ -28,6 +28,7 @@ copy-gnome logs [--since 30m] [-n 100] [-f] [--json]
 copy-gnome enable | disable | restart
 copy-gnome extension-status
 copy-gnome paths [--json]
+copy-gnome config path|validate|show|get|set|edit
 copy-gnome repair [--file PATH] [--yes] [--json]
 copy-gnome --completion bash
 ```
@@ -41,8 +42,32 @@ design below.
 
 `scripts/install-cli.sh` installs bash completion to
 `${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/copy-gnome` by running
-`copy-gnome --completion bash`. Completion covers top-level commands, command options, and
-file completion for `repair --file`.
+`copy-gnome --completion bash`. Completion covers top-level commands, command options,
+`config` subcommands, config keys for `config get` / `config set`, and file completion for
+`repair --file`.
+
+Implemented config commands:
+
+```sh
+copy-gnome config path
+copy-gnome config validate
+copy-gnome config show [--json] [--meta]
+copy-gnome config get general.captureImages [--json]
+copy-gnome config set general.captureImages false [--json]
+copy-gnome config edit [--editor 'code --wait']
+```
+
+`path`, `validate`, `show`, and `get` are read-only. `set` validates the key and value
+(booleans, integers, numeric ranges, and `storage.backend` / `logging.level` enums are
+checked, and an out-of-range or otherwise invalid value is rejected), then rewrites only
+that key in the existing `config.yaml` through a temporary file and rename, preserving
+comments, key order, and any keys this CLI does not recognize. If the current `config.yaml` cannot be
+parsed, `set` refuses rather than clobbering settings it could not read - fix it or use
+`edit`. `edit` opens a temporary copy with `--editor`, `$VISUAL`, `$EDITOR`, or the system
+`editor` command, validates YAML syntax, then replaces `config.yaml`; invalid YAML leaves
+the old file untouched. If only `config.json` exists, `set` / `edit` create `config.yaml`,
+which then takes precedence. These commands do not import extension runtime code or ask
+GNOME Shell to reload settings.
 
 Known GNOME Shell log noise, including Ubuntu Dock keybinding warnings, is documented in
 [13-troubleshooting](13-troubleshooting.md).
