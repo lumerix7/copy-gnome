@@ -20,7 +20,7 @@ implemented as a Shell extension so it works where standalone clipboard managers
 - **Write-back**: choosing an entry restores it to the clipboard; optional auto-paste.
 - **Persistence** across login sessions, written asynchronously off the compositor's hot path.
 - **Clipboard persistence**: keep content alive after the source app exits.
-- **Privacy**: skip password-manager / concealed entries; pause toggle; per-app & regex excludes.
+- **Privacy**: skip password-manager / concealed entries; per-app & regex excludes.
 - **Config** in YAML (JSON accepted), with sensible defaults; optional prefs GUI.
 
 ## Feature set (post-MVP / planned)

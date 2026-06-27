@@ -112,7 +112,6 @@ ui:
 
 keybindings:                        # mirror only; authoritative copy is GSettings
   togglePopup: "<Super>v"
-  togglePause: "<Super><Shift>v"
 
 logging:
   level: info                       # error|warn|info|debug

@@ -33,7 +33,6 @@ function filePreview(uriList) {
 export default class CopyGnomeExtension extends Extension {
     enable() {
         this._enabled = true;
-        this._paused = false;
         this._timers = new Set();
         this._keys = [];
 
@@ -73,7 +72,6 @@ export default class CopyGnomeExtension extends Extension {
             return;
         this._monitor = new Monitor({
             onCapture: c => this._onCapture(c),
-            isPaused: () => this._paused,
             watchPrimary: () => this._config.general.watchPrimarySelection,
             captureFiles: () => this._config.general.captureFiles,
             captureImages: () => this._config.general.captureImages,
@@ -99,7 +97,6 @@ export default class CopyGnomeExtension extends Extension {
         Main.panel.addToStatusArea(UUID, this._indicator);
 
         this._addKeybinding('toggle-popup', () => this._popup.toggle());
-        this._addKeybinding('toggle-pause', () => this._togglePause());
 
         // Periodic guaranteed flush (the "~1 minute persistence").
         const sec = Math.max(5, this._config.storage.flushIntervalSec);
@@ -194,12 +191,6 @@ export default class CopyGnomeExtension extends Extension {
         } catch (e) {
             log.warn(`add keybinding ${name}: ${e.message}`);
         }
-    }
-
-    _togglePause() {
-        this._paused = !this._paused;
-        this._indicator?.refresh();
-        log.info(`capture ${this._paused ? 'paused' : 'resumed'}`);
     }
 
     _onHistoryChange() {

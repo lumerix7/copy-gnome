@@ -10,11 +10,5 @@
       <description>Shortcut to open the centered clipboard history popup.</description>
     </key>
 
-    <key name="toggle-pause" type="as">
-      <default><![CDATA[['<Super><Shift>v']]]></default>
-      <summary>Pause/resume capture</summary>
-      <description>Shortcut to toggle clipboard capture on/off.</description>
-    </key>
-
   </schema>
 </schemalist>

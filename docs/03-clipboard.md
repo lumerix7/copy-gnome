@@ -119,7 +119,6 @@ Skip capturing when any of:
 - The source advertises a **concealed/secret** hint mime. Honor common ones:
   `x-kde-passwordManagerHint` (value `secret`), and GNOME's password-entry concealed
   selections. Maintain a configurable `secretMimes` list.
-- **Pause / incognito** mode is active (keybinding/CLI; no panel-menu pause item).
 - Source app matches an **exclude list** (by app id / wm_class when resolvable).
 - Content matches an **exclude regex** (e.g. looks like a TOTP, credit-card pattern) -
   configurable, off by default.

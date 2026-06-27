@@ -50,7 +50,7 @@ DBus-service + GTK app.
 | 4. SQLite vs JSONL      | **Daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot lines** in pure GJS - zero native deps.                                                                                                           | [04](04-storage.md)                              |
 | 5. Shortcuts + popup    | Global keybinding opens a centered `St` popup over the focused window's monitor, with modal keyboard grab.                                                                                                           | [07](07-ui.md), [08](08-keybindings.md)          |
 | 6. Monitor + write-back | `MetaSelection::owner-changed` → capture; selecting an entry sets the clipboard and optionally auto-pastes.                                                                                                          | [03](03-clipboard.md)                            |
-| 7. Other                | Privacy/password skipping, pause/incognito, primary-selection, caps, export/import, migration - see below.                                                                                                           | [03](03-clipboard.md), [06](06-history-model.md) |
+| 7. Other                | Privacy/password skipping, primary-selection, caps, export/import, migration - see below.                                                                                                           | [03](03-clipboard.md), [06](06-history-model.md) |
 
 > Path note: data home defaults to **`/opt/copy-gnome/$USER`**, deliberately **off
 > `$HOME`** (home gets cluttered and is often reset when fixing GNOME login problems, which

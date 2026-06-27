@@ -64,7 +64,7 @@ copy-gnome paste                            # print current clipboard text to st
 copy-gnome use <id>                         # restore entry to clipboard (move-to-front)
 copy-gnome search <query> [--json]
 copy-gnome rm <id> | copy-gnome clear [--yes]
-copy-gnome pause | resume | status          # privacy/incognito toggle + state
+copy-gnome status                           # extension state (count, paths, config)
 copy-gnome enable | disable | restart       # enable/disable the Shell extension itself
 copy-gnome extension-status                 # wrapper around gnome-extensions info
 copy-gnome doctor [--json] [--since DURATION]
@@ -76,9 +76,8 @@ copy-gnome popup                            # open the history popup (same as th
 - `--json` everywhere for scripting; default output is human-readable.
 - Exit codes: `0` ok, `1` unhealthy checks, `2` bad args, `3` service unavailable,
   `4` not found.
-- `pause`/`resume` keeps the extension loaded and only toggles capture. `disable` unloads
-  the extension through GNOME Shell, useful when a Shell-side bug needs a quick terminal
-  escape hatch.
+- `disable` unloads the extension through GNOME Shell, useful when a Shell-side bug needs a
+  quick terminal escape hatch.
 - `doctor` is the first recovery/debug command to implement because it must still work
   when the extension's own DBus service is unavailable.
 
@@ -142,12 +141,12 @@ Offline checks, always available:
   `copy-gnome`, `JS ERROR`, `signal 11`, `popup show failed`, `modal release failed`,
   `clipboard read failed`, `Xwayland exited unexpectedly`.
 - Check common keybinding hazards with `gsettings`, especially `org.gnome.settings-daemon.plugins.media-keys logout`,
-  screenshot shortcuts, and the extension's `toggle-popup` / `toggle-pause` keys.
+  screenshot shortcuts, and the extension's `toggle-popup` keys.
 
 Online checks, only when the extension service is reachable:
 
 - DBus name registered and introspectable.
-- `Status` method returns paused/enabled state, history count, data home, config path,
+- `Status` method returns enabled state, history count, data home, config path,
   active UI settings, and last warning timestamp.
 - `List --limit 1` works from the extension's in-memory history without scanning clips files.
 - `ShowPopup` can be skipped by default; make it explicit with `doctor --interactive` so
@@ -228,7 +227,6 @@ Keep `doctor` read-only. Any future repair action must be explicit, e.g.
                             <arg type="s" name="json" direction="out"/></method>
   <method name="Remove">    <arg type="s" name="id" direction="in"/></method>
   <method name="Clear">     </method>
-  <method name="SetPaused"> <arg type="b" name="paused" direction="in"/></method>
   <method name="Status">    <arg type="s" name="json" direction="out"/></method>
   <method name="ShowPopup"> </method>
   <signal name="HistoryChanged"> <arg type="s" name="topId"/> </signal>
@@ -243,7 +241,7 @@ Keep `doctor` read-only. Any future repair action must be explicit, e.g.
 - For binary content over DBus, pass `ay` (byte array) decoded from the clip's capped
   inline base64 payload. Oversized non-file binary payloads are not persisted in v1.
 - Security: session bus is per-user already; no extra auth needed. Don't expose anything
-  that bypasses the privacy/pause rules (`Copy` still goes through the normal capture
+  that bypasses the privacy rules (`Copy` still goes through the normal capture
   pipeline so excludes apply).
 - `Status` must be cheap and safe: no clips-file scans, no compaction, no thumbnails, no
   popup creation. It returns only in-memory counters, config summary, data paths, and
@@ -263,5 +261,5 @@ Keep `doctor` read-only. Any future repair action must be explicit, e.g.
 ## Scope
 
 CLI is **post-MVP** (suggest milestone M5 alongside the prefs GUI). The DBus service is
-small enough that exporting `List/Use/ShowPopup/SetPaused` early is cheap and also lets
+small enough that exporting `List/Use/ShowPopup` early is cheap and also lets
 other tools (e.g. custom keybindings, `ydotool` scripts) drive copy-gnome.

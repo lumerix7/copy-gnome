@@ -63,6 +63,6 @@ class Indicator extends PanelMenu.Button {
     }
 
     // The popup reads live history when it opens, so there is nothing to rebuild here. Kept
-    // because the extension nudges the indicator on history/pause changes.
+    // because the extension nudges the indicator on history changes.
     refresh() {}
 });

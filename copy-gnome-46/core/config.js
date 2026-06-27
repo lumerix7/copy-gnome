@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import { log } from './log.js';
-import { parseYaml } from '../vendor/yaml.js';
+import { parseYaml, serializeYaml } from '../vendor/yaml.js';
 
 // Defaults mirror docs/05-config.md. The on-disk config.yaml (or config.json) is merged
 // over these; missing/invalid values silently fall back so a bad config never breaks the
@@ -220,4 +220,45 @@ function pasteOverrides(value) {
         }))
         .filter(o => o.match !== '')
         .slice(0, 100);
+}
+
+// Which config file the loader will pick, by existence (loadConfig parses the winner). Single
+// source of truth for the yaml > json > none precedence, used by saveConfig (to pick the write
+// format) and the prefs About page.
+export function configStatus(configDir) {
+    const yamlPresent = Gio.File.new_for_path(
+        GLib.build_filenamev([configDir, 'config.yaml'])).query_exists(null);
+    const jsonPresent = Gio.File.new_for_path(
+        GLib.build_filenamev([configDir, 'config.json'])).query_exists(null);
+    return {
+        yamlPresent,
+        jsonPresent,
+        active: yamlPresent ? 'yaml' : (jsonPresent ? 'json' : 'none'),
+    };
+}
+
+// Write the (already-merged) config back in the active format. YAML is the default: we write
+// config.yaml unless a config.json already exists AND no YAML does (the only case we follow an
+// existing JSON). So a first-time user (no file at all) gets a config.yaml, matching the
+// "YAML first" convention. prefs.js runs out-of-process (not inside gnome-shell), so a
+// synchronous write here is fine. Returns { ok, format: 'yaml'|'json', path }.
+export function saveConfig(configDir, config) {
+    const status = configStatus(configDir);
+    const useYaml = status.yamlPresent || !status.jsonPresent;
+    try {
+        GLib.mkdir_with_parents(configDir, 0o700);
+        const path = GLib.build_filenamev([configDir, useYaml ? 'config.yaml' : 'config.json']);
+        const text = useYaml ? serializeYaml(config) : `${JSON.stringify(config, null, 2)}\n`;
+        const stream = Gio.File.new_for_path(path)
+            .replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        try {
+            stream.write_all(new TextEncoder().encode(text), null);
+        } finally {
+            stream.close(null);
+        }
+        return { ok: true, format: useYaml ? 'yaml' : 'json', path };
+    } catch (e) {
+        log.warn(`saveConfig failed: ${e.message}`);
+        return { ok: false, format: useYaml ? 'yaml' : 'json', error: e.message };
+    }
 }

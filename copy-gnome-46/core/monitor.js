@@ -27,11 +27,10 @@ function supportedImageMime(mimes) {
 
 export class Monitor {
     constructor({
-        onCapture, isPaused, watchPrimary, captureFiles, captureImages, maxItemBytes,
+        onCapture, watchPrimary, captureFiles, captureImages, maxItemBytes,
         maxBinaryBytes, secretMimes,
     }) {
         this._onCapture = onCapture;
-        this._isPaused = isPaused ?? (() => false);
         this._watchPrimary = watchPrimary ?? (() => false);
         this._captureFiles = captureFiles ?? (() => false);
         this._captureImages = captureImages ?? (() => false);
@@ -113,7 +112,6 @@ export class Monitor {
             const isClipboard = selType === Meta.SelectionType.SELECTION_CLIPBOARD;
             const isPrimary = selType === Meta.SelectionType.SELECTION_PRIMARY;
             if (!isClipboard && !(wantPrimary && isPrimary)) return;
-            if (this._isPaused()) return;
             if (!source) return;   // selection cleared
 
             this._read(source).catch(e => log.warn(`read failed: ${e.message}`));

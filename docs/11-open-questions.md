@@ -22,7 +22,7 @@
 | R3 | Vendored YAML parser bugs on exotic YAML | Keep config schema simple/flat; validate + fall back to defaults; JSON always available |
 | R4 | Write-back re-captured as a new entry (loop) | Expected-hash guard around our own `set_content` |
 | R5 | Auto-paste unreliable (focus/timing) on Wayland | Default off; restore focus before injecting; document |
-| R6 | Secrets captured before app sets concealed hint | Honor secret mimes + excludes; pause toggle; optional regex; document at-rest plaintext |
+| R6 | Secrets captured before app sets concealed hint | Honor secret mimes + excludes; optional regex; document at-rest plaintext |
 | R7 | GNOME 50 API drift breaks build | Compat shim layer; verify against 50 release notes when available |
 | R8 | Large image histories bloat disk | Strict inline/base64 caps; oversized image/binary payloads are skipped |
 | R9 | Lock-screen enable/disable churn causes leaks | Strict timer/signal teardown; flush on every `disable()` |
@@ -49,5 +49,5 @@
 - **M1**: monitor + capture + in-memory history + local store + panel menu (no popup).
 - **M2**: caret/window popup + search + write-back + keybinding.
 - **M3**: images/blobs + thumbnails + caps/eviction + clipboard persistence.
-- **M4**: privacy/excludes + pause + config hot-reload.
+- **M4**: privacy/excludes + config hot-reload.
 - **M5**: prefs GUI, edit, export/import, DBus service + CLI, GNOME 50 build.

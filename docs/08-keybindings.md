@@ -21,10 +21,6 @@ global Shell shortcut from a plain string at runtime without a backing schema. S
     <default><![CDATA[['<Super>v']]]></default>
     <summary>Open clipboard history popup</summary>
   </key>
-  <key name="toggle-pause" type="as">
-    <default><![CDATA[['<Super><Shift>v']]]></default>
-    <summary>Pause/resume capture</summary>
-  </key>
   <!-- a few bootstrap keys also live here: backend, enabled (see 05) -->
 </schema>
 ```
@@ -37,7 +33,6 @@ Compiled with `glib-compile-schemas schemas/` at build/install time (see [10](10
 Main.wm.addKeybinding('toggle-popup', this._settings,
     Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
     () => this._popup.toggle());
-Main.wm.addKeybinding('toggle-pause', this._settings, /*... */, () => this._togglePause());
 ```
 
 Remove with `Main.wm.removeKeybinding('toggle-popup')` in `disable()`.

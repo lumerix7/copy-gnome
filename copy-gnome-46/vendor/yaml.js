@@ -162,3 +162,75 @@ export function parseYaml(text) {
     if (lines.length === 0) return {};
     return parseNode(lines[0].indent);
 }
+
+// Minimal YAML serializer that mirrors the subset parseYaml reads: nested block maps, block
+// sequences of scalars or of small maps (pasteOverrides), empty [], and scalars
+// (bool/int/float/string/null). Strings that YAML would parse as another type, or that contain
+// structural/control characters, are double-quoted. Used by the prefs GUI to write config.yaml
+// so GUI edits take effect even when a hand-written YAML is present.
+// Trade-off: round-tripping through this DROPS human comments and reformats whitespace -
+// accepted for a GUI-managed file.
+export function serializeYaml(obj) {
+    return emitMap(obj, 0).join('\n') + '\n';
+}
+
+function emitMap(obj, indent) {
+    const pad = '  '.repeat(indent);
+    const out = [];
+    for (const [key, val] of Object.entries(obj)) {
+        if (Array.isArray(val)) {
+            if (val.length === 0) {
+                out.push(`${pad}${key}: []`);
+            } else {
+                out.push(`${pad}${key}:`);
+                out.push(...emitSeq(val, indent + 1));
+            }
+        } else if (val !== null && typeof val === 'object') {
+            out.push(`${pad}${key}:`);
+            out.push(...emitMap(val, indent + 1));
+        } else {
+            out.push(`${pad}${key}: ${formatScalar(val)}`);
+        }
+    }
+    return out;
+}
+
+function emitSeq(arr, indent) {
+    const pad = '  '.repeat(indent);
+    const out = [];
+    for (const item of arr) {
+        if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+            const entries = Object.entries(item);
+            if (entries.length === 0) {
+                out.push(`${pad}- {}`);
+            } else {
+                out.push(`${pad}- ${entries[0][0]}: ${formatScalar(entries[0][1])}`);
+                for (let i = 1; i < entries.length; i++)
+                    out.push(`${pad}  ${entries[i][0]}: ${formatScalar(entries[i][1])}`);
+            }
+        } else {
+            out.push(`${pad}- ${formatScalar(item)}`);
+        }
+    }
+    return out;
+}
+
+function formatScalar(v) {
+    if (v === null || v === undefined) return 'null';
+    if (v === true) return 'true';
+    if (v === false) return 'false';
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'null';
+    if (typeof v === 'string') return quoteString(v);
+    return quoteString(String(v));
+}
+
+// Quote on any doubt: strings that look like bool/number/null, or contain YAML
+// structural/control characters, or have leading/trailing whitespace.
+function quoteString(s) {
+    if (s === '') return '""';
+    if (/^(?:true|false|null|~|yes|no|on|off)$/i.test(s)) return `"${s}"`;
+    if (/^[+-]?\d/.test(s)) return `"${s}"`;
+    if (/[:#&*!|>'"%@`,\[\]{}]/.test(s)) return `"${s}"`;
+    if (/^\s|\s$/.test(s) || /[\x00-\x1f]/.test(s)) return `"${s}"`;
+    return s;
+}
