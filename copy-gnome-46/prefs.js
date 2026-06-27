@@ -45,8 +45,8 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         window.add(this._aboutPage());
     }
 
-    // Debounced write of the whole merged config to config.json. Coalesces rapid edits (spin
-    // scrubbing, fast toggles) into one serialize + synchronous write (fine: prefs is
+    // Debounced write of the whole merged config to the active config file. Coalesces rapid edits
+    // (spin scrubbing, fast toggles) into one serialize + synchronous write (fine: prefs is
     // out-of-process).
     _persist() {
         if (this._persistSource)
@@ -106,15 +106,23 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             title: 'Keybindings',
             description: 'Press Set, then the keys. Backspace clears; Esc cancels.',
         });
-        group.add(this._keybindingRow('toggle-popup',
+        for (const row of this._keybindingRows('toggle-popup',
             'Open clipboard popup',
-            'Opens the centered, searchable history list.'));
+            'Opens the centered, searchable history list.'))
+            group.add(row);
         page.add(group);
         return page;
     }
 
-    _keybindingRow(key, title, subtitle) {
-        const row = this._settingsRow(key, title, subtitle);
+    _keybindingRows(key, title, description) {
+        const row = new Adw.ActionRow({ title });
+        const detailRow = new Adw.ActionRow({
+            title: description,
+            subtitle: this._displayText(this._settingsCommand(key)),
+        });
+        detailRow.subtitle_lines = 2;
+        detailRow.add_suffix(this._copyButton(() =>
+            [description, this._settingsCommand(key)].join('\n')));
 
         const accelLabel = new Gtk.Label({ label: this._readableAccel(key), visible: true });
         accelLabel.add_css_class('dim-label');
@@ -125,7 +133,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             accelLabel.label = 'Press keys...  (Esc cancels)';
             this._captureKeybinding(key, () => {
                 accelLabel.label = this._readableAccel(key);
-                row.subtitle = this._settingsSubtitle(key, subtitle);
+                detailRow.subtitle = this._displayText(this._settingsCommand(key));
             });
         });
         row.add_suffix(setBtn);
@@ -134,11 +142,11 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         clearBtn.connect('clicked', () => {
             this._settings.set_strv(key, []);
             accelLabel.label = this._readableAccel(key);
-            row.subtitle = this._settingsSubtitle(key, subtitle);
+            detailRow.subtitle = this._displayText(this._settingsCommand(key));
         });
         row.add_suffix(clearBtn);
 
-        return row;
+        return [row, detailRow];
     }
 
     _readableAccel(key) {
@@ -158,32 +166,16 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         return [description, this._configLine(section, field)].filter(Boolean).join('\n');
     }
 
-    _settingsSubtitle(field, description = '') {
-        return [description, this._settingsCommand(field)].filter(Boolean).join('\n');
-    }
-
     _configRow(section, field, title, description = '') {
         const subtitle = this._configSubtitle(section, field, description);
-        const row = new Adw.ActionRow({ title, subtitle });
+        const row = new Adw.ActionRow({ title, subtitle: this._displayText(subtitle) });
         row.subtitle_lines = 2;
         row.add_suffix(this._copyButton(() => this._configCopyText(section, field, title, description)));
         return row;
     }
 
-    _settingsRow(field, title, description = '') {
-        const subtitle = this._settingsSubtitle(field, description);
-        const row = new Adw.ActionRow({ title, subtitle });
-        row.subtitle_lines = 2;
-        row.add_suffix(this._copyButton(() => this._settingsCopyText(field, title, description)));
-        return row;
-    }
-
     _configCopyText(section, field, title, description = '') {
         return this._configSubtitle(section, field, description);
-    }
-
-    _settingsCopyText(field, title, description = '') {
-        return this._settingsSubtitle(field, description);
     }
 
     _configLine(section, field) {
@@ -192,7 +184,8 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
     _settingsCommand(field) {
         const value = this._settings.get_strv(field);
-        return `gsettings set org.gnome.shell.extensions.copy-gnome ${field} ${this._shellQuote(JSON.stringify(value))}`;
+        const schemaDir = GLib.build_filenamev([this.path, 'schemas']);
+        return `GSETTINGS_SCHEMA_DIR=${this._shellQuote(schemaDir)} gsettings set org.gnome.shell.extensions.copy-gnome ${field} ${this._shellQuote(JSON.stringify(value))}`;
     }
 
     _formatValue(value) {
@@ -205,6 +198,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
     _shellQuote(value) {
         return `'${String(value).replace(/'/g, `'\\''`)}'`;
+    }
+
+    _displayText(value) {
+        return GLib.markup_escape_text(String(value), -1);
     }
 
     _copyButton(getText) {
@@ -319,7 +316,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         sw.connect('notify::active', () => {
             this._config[section][field] = sw.active;
-            row.subtitle = this._configSubtitle(section, field, subtitle);
+            row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
             this._persist();
         });
         row.add_suffix(sw);
@@ -361,7 +358,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         spin.visible = true;
         spin.connect('value-changed', () => {
             this._config[section][field] = fromSpin(spin.value);
-            row.subtitle = this._configSubtitle(section, field, subtitle);
+            row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
             this._persist();
         });
         row.add_suffix(spin);
@@ -381,7 +378,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
                 .split(',')
                 .map(s => s.trim())
                 .filter(s => s.length > 0);
-            row.subtitle = this._configSubtitle(section, field, subtitle);
+            row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
             this._persist();
         });
         row.add_suffix(entry);
@@ -403,7 +400,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
                 if (!Array.isArray(value))
                     throw new Error('expected array');
                 this._config[section][field] = value;
-                row.subtitle = this._configSubtitle(section, field, subtitle);
+                row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
                 entry.remove_css_class('error');
                 this._persist();
             } catch (e) {
@@ -423,7 +420,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         dropdown.valign = Gtk.Align.CENTER;
         dropdown.connect('notify::selected', () => {
             this._config[section][field] = values[dropdown.selected] ?? values[0];
-            row.subtitle = this._configSubtitle(section, field, subtitle);
+            row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
             this._persist();
         });
         row.add_suffix(dropdown);
