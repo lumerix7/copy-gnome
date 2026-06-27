@@ -17,7 +17,7 @@ src/
       index.js        # Storage interface + factory (picks backend from config)
       json-store.js   # daily append-only full-history snapshot JSONL
       gda-store.js    # optional backend: SQLite via libgda (only if typelib present)
-    config.js         # load/merge/validate YAML|JSON config, file-watch reload
+    config.js         # load/merge/validate YAML|JSON config
     paths.js          # resolve COPY_GNOME_HOME / XDG dirs
     hash.js           # GLib.compute_checksum_for_bytes wrapper (sha256)
     paste.js          # Clutter virtual-device paste injection
@@ -64,7 +64,7 @@ src/
 
 `enable()`:
 1. `paths.resolve()` → ensure `COPY_GNOME_HOME` subdirs exist (async).
-2. `config.load()` → merged config object; start file-watch.
+2. `config.load()` → merged config object.
 3. `store.open()` → load index into `history.js`.
 4. `monitor.start()` → connect `MetaSelection::owner-changed`.
 5. register keybindings (see [08](08-keybindings.md)), build `indicator`.

@@ -5,11 +5,9 @@
 # config.json is also accepted (same keys) if you prefer JSON.
 
 general:
-  enabled: true
   watchPrimarySelection: false   # capture middle-click PRIMARY selection too
   captureFiles: true             # copied files are stored as URI/path references only
   captureImages: true            # screenshot/image clipboard capture; risky on GNOME Shell 46
-  clipboardPersistence: true     # keep content alive after the source app exits
 
 history:
   maxItems: 30                    # visible history count, max 100
@@ -29,8 +27,6 @@ storage:
 
 privacy:
   secretMimes: ["x-kde-passwordManagerHint"]
-  excludeApps: []
-  excludeRegex: []
 
 ui:
   popupWidth: 640                 # px; auto-shrinks on small monitors
@@ -39,7 +35,6 @@ ui:
   popupOffsetY: 0
   popupEdgeMargin: 8              # min distance from monitor edge
   popupOpacity: 0.82              # whole panel opacity, 0.1..1
-  popupMaxRows: 20
   numberPickTimeoutMs: 800        # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false           # reserved; current popup uses text-only image previews
   autoPaste: true                 # also inject the paste keystroke after restore. The

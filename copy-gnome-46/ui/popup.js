@@ -21,7 +21,6 @@ const DEFAULT_UI = {
     popupOffsetY: 0,
     popupEdgeMargin: 8,
     popupOpacity: 0.82,
-    popupMaxRows: 20,
     numberPickTimeoutMs: 800,
 };
 
@@ -144,11 +143,10 @@ function ensureActorVisibleInScrollView(scrollView, actor) {
 }
 
 export class Popup {
-    constructor({ getItems, onActivate, onClear, maxRows, getUi }) {
+    constructor({ getItems, onActivate, onClear, getUi }) {
         this._getItems = getItems;
         this._onActivate = onActivate;
         this._onClear = onClear ?? (() => {});
-        this._maxRows = maxRows ?? 10;
         this._getUi = getUi ?? (() => null);
 
         this._backdrop = null;
@@ -200,14 +198,19 @@ export class Popup {
             ui.numberPickTimeoutMs, DEFAULT_UI.numberPickTimeoutMs, 100, 5000);
         const offsetX = num(ui.popupOffsetX, DEFAULT_UI.popupOffsetX, -1000, 1000);
         const offsetY = num(ui.popupOffsetY, DEFAULT_UI.popupOffsetY, -1000, 1000);
-        this._maxRows = num(ui.popupMaxRows, this._maxRows, 1, 100);
         this._numberPickTimeoutMs = numberPickTimeoutMs;
 
         const monitor = (placement === 'panel' ? monitorForActor(anchorActor) : null) ??
             focusedMonitor() ?? Main.layoutManager.currentMonitor;
         if (!monitor) return;
         width = Math.min(width, Math.max(240, monitor.width - edgeMargin * 2));
-        maxHeight = Math.min(maxHeight, Math.max(120, monitor.height - edgeMargin * 2));
+        // maxHeight caps only the scroll list. Reserve room for the rest of the panel (search
+        // entry + number hint + footer + padding/spacing) so the *whole* panel fits the
+        // monitor; otherwise on short screens natH exceeds the monitor and the footer (Clear)
+        // is clipped. ~96px is a conservative upper bound for that chrome at default styling.
+        const panelChromePx = 96;
+        maxHeight = Math.min(maxHeight,
+            Math.max(120, monitor.height - edgeMargin * 2 - panelChromePx));
 
         this._backdrop = new St.Widget({
             reactive: true,
@@ -439,9 +442,9 @@ export class Popup {
 
         let items = [];
         try {
-            items = this._getItems()
-                .filter(r => matches(r, query))
-                .slice(0, this._maxRows);
+            // Render every matching entry. History is already bounded by `history.maxItems`,
+            // and the list scrolls via `popupMaxHeight`, so there is no row-count limit here.
+            items = this._getItems().filter(r => matches(r, query));
         } catch (e) {
             log.warn(`popup rebuild failed: ${e.message}`);
         }

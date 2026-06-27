@@ -233,12 +233,11 @@ export class Store {
     appendSnapshot(records) {
         if (this._closed)
             return;
-        const line = this._lineForSnapshot(records);
-        if (!line)
-            return;
-        const target = currentClipName();
-        // A full snapshot supersedes older unsaved snapshots, so never build a large queue.
-        this._pending = { target, line };
+        // Store only the records reference (a shallow copy from history.list()); the expensive
+        // JSON.stringify of the full history is deferred to flush()/closeSync() so the capture
+        // path stays O(1) and never serializes the whole history on every copy/touch. Each call
+        // supersedes any unsaved snapshot, so we never queue stale or duplicate work.
+        this._pending = { target: currentClipName(), records };
         this._scheduleFlush();
     }
 
@@ -292,7 +291,13 @@ export class Store {
         const batch = this._pending;
         this._pending = null;
         try {
-            await this._appendTextAsync(clipPath(this._dir, batch.target), batch.line + '\n');
+            // Serialize here (debounced after the last change), not in the capture path.
+            // _lineForSnapshot returns null for an oversized snapshot (already warned); drop
+            // it without flipping the degraded flag, since this isn't an IO error.
+            const line = this._lineForSnapshot(batch.records);
+            if (!line)
+                return;
+            await this._appendTextAsync(clipPath(this._dir, batch.target), line + '\n');
             this._degraded = false;
         } catch (e) {
             if (!this._degraded) {
@@ -329,17 +334,21 @@ export class Store {
         }
         if (this._busy || this._degraded || !this._pending)
             return;
-        const pendingBytes = this._pending.line.length + 1;
-        if (pendingBytes > FINAL_FLUSH_MAX_BYTES) {
-            log.warn(`skipping final flush: ${pendingBytes} pending bytes exceeds safety cap`);
-            return;
-        }
         const batch = this._pending;
         this._pending = null;
         try {
+            // Best-effort synchronous flush on teardown (see WARNING.md). Serialize here, then
+            // apply the same size cap that guards the async path.
+            const line = this._lineForSnapshot(batch.records);
+            if (!line)
+                return;
+            if (line.length + 1 > FINAL_FLUSH_MAX_BYTES) {
+                log.warn(`skipping final flush: ${line.length + 1} pending bytes exceeds safety cap`);
+                return;
+            }
             const file = Gio.File.new_for_path(clipPath(this._dir, batch.target));
             const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
-            stream.write_all(_enc.encode(batch.line + '\n'), null);
+            stream.write_all(_enc.encode(line + '\n'), null);
             stream.close(null);
         } catch (e) {
             log.error(`final flush failed: ${e.message}`);

@@ -10,8 +10,11 @@
   extension self-contained.
 - A JSON Schema (documented here) validates the merged config; unknown keys warn, bad
   values fall back to defaults (never crash the Shell).
-- Config file is **watched** (`Gio.FileMonitor`); edits hot-reload (debounced). Some
-  changes apply live (caps, excludes); keybindings require re-register (handled).
+- Config is loaded at `enable()`. Opening the popup re-reads the whole config file, so most
+  edits (caps, privacy, capture toggles, `ui.*`) take effect on the next popup open with no
+  restart. Keybindings are registered once at `enable()`, so changing them needs a
+  disable/enable cycle. True file-watch (`Gio.FileMonitor`) hot-reload is **not** implemented
+  (planned, see [11](11-open-questions.md) M4).
 
 
 ### Why keybindings are the exception (live in GSettings)
@@ -66,11 +69,9 @@ on startup so it's never ambiguous).
 ```yaml
 # config.yaml
 general:
-  enabled: true
   watchPrimarySelection: false      # PRIMARY (middle-click) capture
   captureFiles: true                # copied files are stored as URI/path references only
   captureImages: true               # screenshot/image capture; risky on GNOME Shell 46
-  clipboardPersistence: true        # re-own selection after source app exits
 
 history:
   maxItems: 30                      # visible history count, max 100
@@ -89,10 +90,7 @@ storage:
   maxLoadedLines: 100               # target: startup tail-load cap
 
 privacy:
-  pauseHotkeyToggles: true
   secretMimes: ["x-kde-passwordManagerHint"]
-  excludeApps: []                   # wm_class / app-id substrings
-  excludeRegex: []                  # patterns; matched content is not stored
 
 ui:
   popupWidth: 640                   # px; auto-shrinks on small monitors
@@ -101,7 +99,6 @@ ui:
   popupOffsetY: 0
   popupEdgeMargin: 8                # min distance from monitor edge
   popupOpacity: 0.82                # whole panel opacity, 0.1..1
-  popupMaxRows: 20
   numberPickTimeoutMs: 800          # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false             # reserved; current popup uses text-only image previews
   autoPaste: true                   # ALSO inject the paste keystroke after restore.

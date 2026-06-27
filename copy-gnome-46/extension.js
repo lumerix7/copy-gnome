@@ -87,7 +87,6 @@ export default class CopyGnomeExtension extends Extension {
             getItems: () => this._history.list(),
             onActivate: (rec, targetWindow) => this._restore(rec, targetWindow),
             onClear: () => this._history.clear(),
-            maxRows: this._config.ui.popupMaxRows,
             getUi: () => this._uiConfig(),
         });
 

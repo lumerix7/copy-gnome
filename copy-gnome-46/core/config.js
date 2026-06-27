@@ -9,11 +9,9 @@ import { parseYaml } from '../vendor/yaml.js';
 // shell.
 export const DEFAULTS = {
     general: {
-        enabled: true,
         watchPrimarySelection: false,
         captureFiles: true,
         captureImages: true,
-        clipboardPersistence: true,
     },
     history: {
         maxItems: 30,
@@ -33,8 +31,6 @@ export const DEFAULTS = {
     },
     privacy: {
         secretMimes: ['x-kde-passwordManagerHint'],
-        excludeApps: [],
-        excludeRegex: [],
     },
     ui: {
         popupWidth: 640,
@@ -43,7 +39,6 @@ export const DEFAULTS = {
         popupOffsetY: 0,
         popupEdgeMargin: 8,
         popupOpacity: 0.82,
-        popupMaxRows: 20,
         numberPickTimeoutMs: 800,
         showThumbnails: false,
         autoPaste: true,
@@ -82,7 +77,6 @@ const LIMITS = {
     'ui.popupOffsetY': [-1000, 1000],
     'ui.popupEdgeMargin': [0, 96],
     'ui.popupOpacity': [0.1, 1],
-    'ui.popupMaxRows': [1, 100],
     'ui.numberPickTimeoutMs': [100, 5000],
     'ui.autoPasteDelayMs': [0, 5000],
 };
@@ -179,8 +173,6 @@ function sanitizeConfig(cfg) {
         ? cfg.logging.level : 'info';
 
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
-    cfg.privacy.excludeApps = stringList(cfg.privacy.excludeApps, []);
-    cfg.privacy.excludeRegex = stringList(cfg.privacy.excludeRegex, []);
     cfg.ui.terminalApps = stringList(cfg.ui.terminalApps, DEFAULTS.ui.terminalApps);
     cfg.ui.pasteOverrides = pasteOverrides(cfg.ui.pasteOverrides);
 
