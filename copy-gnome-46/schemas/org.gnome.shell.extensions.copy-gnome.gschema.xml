@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.copy-gnome"
+          path="/org/gnome/shell/extensions/copy-gnome/">
+
+    <!-- Keybindings MUST live in GSettings: Main.wm.addKeybinding reads an 'as' key. -->
+    <key name="toggle-popup" type="as">
+      <default><![CDATA[['<Super>v']]]></default>
+      <summary>Open clipboard history popup</summary>
+      <description>Shortcut to open the centered clipboard history popup.</description>
+    </key>
+
+    <key name="toggle-pause" type="as">
+      <default><![CDATA[['<Super><Shift>v']]]></default>
+      <summary>Pause/resume capture</summary>
+      <description>Shortcut to toggle clipboard capture on/off.</description>
+    </key>
+
+  </schema>
+</schemalist>

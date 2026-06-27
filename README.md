@@ -1,0 +1,59 @@
+# copy-gnome
+
+A Wayland-native clipboard manager for GNOME Shell - history, search, instant restore -
+inspired by CopyQ but implemented as a Shell extension so it works on Wayland (where
+standalone clipboard managers can't monitor the clipboard).
+
+> Status: **M1 + popup**, GNOME Shell **46** only. GNOME 50 comes later once 46 is stable.
+
+## Features (current)
+
+- Clipboard monitoring via Mutter's `MetaSelection` (no polling) - text, copied-file
+  URI references, and screenshot/image payloads are enabled by default.
+- MRU history: re-copying or re-using an entry floats it to the top; dedup by sha256.
+- Centered, searchable popup (default **Super+V**):
+  - first row pre-selected → `Enter` pastes the latest entry,
+  - number keys paste rows by number, e.g. **1**, **11**; standalone **0** means row 10,
+  - **Ctrl+F** focuses search; digits typed in search filter the list,
+  - `↑/↓` or mouse hover to select, **double-click** to paste,
+  - every paste writes the system clipboard, moves the entry to front, and (default)
+    injects Ctrl+V into the focused window.
+- Top-panel indicator: recent entries, open clipboard, clear.
+- Simple persistence: daily append-only `clips-YYYYMMDD.jsonl`; each line is a complete
+  sorted history snapshot with bounded inline text, file URI references only for copied
+  files, and optional capped base64 only for non-file payloads.
+- YAML config (JSON also accepted); privacy skip for password-manager selections.
+
+## Install (local, GNOME 46, Wayland)
+
+```sh
+# (optional) one-time data-home setup if you keep the default /opt/copy-gnome
+./scripts/setup-home.sh
+
+./scripts/install.sh
+gnome-extensions enable copy-gnome@clipboard
+# Wayland: LOG OUT and back in for the shell to load the extension.
+```
+
+Then copy `config.example.yaml` to `$COPY_GNOME_HOME/config/config.yaml` if you want to
+tweak defaults (default `$COPY_GNOME_HOME` = `/opt/copy-gnome/$USER`).
+
+## Develop without logging out
+
+```sh
+./scripts/dev-nested.sh                      # nested Wayland shell
+journalctl --user -f | grep -i copy-gnome    # logs
+```
+
+## Layout
+
+- `copy-gnome-46/` - the GNOME 46 extension (live source for now).
+- `copy-gnome-50/` - placeholder for the future GNOME 50 build.
+- `docs/` - full design (start at [docs/00-index.md](docs/00-index.md)).
+- `scripts/` - install / uninstall / dev / setup-home.
+
+## Uninstall
+
+```sh
+./scripts/uninstall.sh            # add --purge to also delete the data home
+```

@@ -1,0 +1,53 @@
+# 11 - Open questions, risks, decisions
+
+## Decided (per user)
+
+- **Data home**: default `COPY_GNOME_HOME=/opt/copy-gnome/$USER`, deliberately **off
+  `$HOME`** (home gets cluttered and is wiped/reset when fixing login problems). XDG used
+  only as a last-resort fallback if `/opt/copy-gnome` is unwritable. See [05](05-config.md),
+  [10](10-packaging.md).
+- **Config**: YAML first, JSON accepted; keybindings in GSettings.
+- **Storage target**: daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot
+  lines with bounded inline text, optional capped base64, and file URI references.
+- **Hash**: **sha256** (full 64-hex, `sha256:` prefixed); sha1 rejected (collisions).
+- **UUID**: `copy-gnome@clipboard`.
+- **Multi-version**: one `src/`, built into `copy-gnome-46/` and `copy-gnome-50/`.
+
+## Risks / things to verify
+
+| # | Risk | Mitigation |
+|---|------|-----------|
+| R1 | `/opt/copy-gnome` needs privileged one-time setup; users may skip it | `setup-home.sh` + clear fallback to XDG with a logged warning |
+| R2 | Blocking IO in `gnome-shell` freezes the desktop | All IO async via Gio; `disable()` only attempts a tiny best-effort flush and skips risky work |
+| R3 | Vendored YAML parser bugs on exotic YAML | Keep config schema simple/flat; validate + fall back to defaults; JSON always available |
+| R4 | Write-back re-captured as a new entry (loop) | Expected-hash guard around our own `set_content` |
+| R5 | Auto-paste unreliable (focus/timing) on Wayland | Default off; restore focus before injecting; document |
+| R6 | Secrets captured before app sets concealed hint | Honor secret mimes + excludes; pause toggle; optional regex; document at-rest plaintext |
+| R7 | GNOME 50 API drift breaks build | Compat shim layer; verify against 50 release notes when available |
+| R8 | Large image histories bloat disk | Strict inline/base64 caps; oversized image/binary payloads are skipped |
+| R9 | Lock-screen enable/disable churn causes leaks | Strict timer/signal teardown; flush on every `disable()` |
+| R10 | `<Super>v` keybinding conflict | Configurable; detect failed registration and warn |
+
+## To confirm with user
+
+1. `metadata.json` `uuid` - set to `copy-gnome@clipboard` (no personal handle). OK, or prefer another namespace?
+2. `/opt/copy-gnome` permission model - sticky `1777` (multi-user) vs `0755` owned by the
+   single user? Proposed: `1777`, per-user `0700` subdir.
+3. PRIMARY-selection capture default - off (proposed) or on?
+4. Auto-paste default - off (proposed) or on?
+5. Commit the generated `copy-gnome-46/` `copy-gnome-50/` dirs, or gitignore and build
+   on install? Proposed: commit, so install works without a build step.
+6. Prefs GUI in MVP or defer (YAML-only first)? Proposed: defer GUI, ship YAML + the
+   keybinding-capture page only.
+7. CLI: ship it? Proposed **yes**, as a thin client (see [12](12-cli.md)), post-MVP (M5).
+8. CLI transport - **DBus default, behind a swappable `IpcTransport`** so socket can drop
+   in later with no logic/CLI change. (DBus isn't at risk in GNOME; abstraction, not
+   transport choice, is what keeps us flexible.) See [12](12-cli.md).
+
+## Suggested milestones
+
+- **M1**: monitor + capture + in-memory history + local store + panel menu (no popup).
+- **M2**: caret/window popup + search + write-back + keybinding.
+- **M3**: images/blobs + thumbnails + caps/eviction + clipboard persistence.
+- **M4**: privacy/excludes + pause + config hot-reload.
+- **M5**: prefs GUI, edit, export/import, DBus service + CLI, GNOME 50 build.

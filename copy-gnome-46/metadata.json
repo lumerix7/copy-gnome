@@ -1,0 +1,9 @@
+{
+  "uuid": "copy-gnome@clipboard",
+  "name": "copy-gnome",
+  "description": "Wayland-native clipboard manager: history, search, restore. Inspired by CopyQ, implemented as a GNOME Shell extension so it works on Wayland.",
+  "shell-version": ["46"],
+  "settings-schema": "org.gnome.shell.extensions.copy-gnome",
+  "version": 1,
+  "version-name": "0.1.0"
+}
