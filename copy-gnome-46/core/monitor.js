@@ -203,7 +203,7 @@ export class Monitor {
                 }
                 const maxBytes = this._maxBinaryBytes();
                 if (maxBytes <= 0) {
-                    log.debug('skipping image selection; inline binary cap is zero');
+                    log.debug('skipping image selection; binary payload cap is zero');
                     return;
                 }
                 const result = await Clipboard.getContentResult(imageMime, maxBytes);

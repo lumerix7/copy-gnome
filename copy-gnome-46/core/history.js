@@ -23,9 +23,28 @@ export class History {
         this._onChange = onChange ?? (() => {});
         this._records = [];
         this._byHash = new Map();
+        this._gen = 0;          // bumped on every mutation; lets the store detect concurrent
+                                // changes and skip a stale trim-sync (see store.flush).
     }
 
+    /** Monotonic change counter. Changes whenever the record set is mutated. */
+    get gen() { return this._gen; }
+
     load(records) {
+        this._replaceRecords(records);
+        this._sort();
+        log.info(`history loaded: ${this._records.length} entries`);
+        this._onChange();
+    }
+
+    trimTo(records) {
+        this._replaceRecords(records);
+        this._sort();
+        this._onChange();
+    }
+
+    _replaceRecords(records) {
+        this._gen++;
         const loaded = [];
         const seen = new Set();
         for (const r of records) {
@@ -40,9 +59,6 @@ export class History {
         this._byHash.clear();
         for (const r of this._records)
             this._byHash.set(r.hash, r);
-        this._sort();
-        log.info(`history loaded: ${this._records.length} entries`);
-        this._onChange();
     }
 
     _sort() {
@@ -123,7 +139,8 @@ export class History {
     }
 
     _persist() {
-        this._store.appendSnapshot(this.list());
+        this._gen++;
+        this._store.appendSnapshot(this.list(), this._gen);
     }
 
     _evict() {
@@ -140,14 +157,6 @@ export class History {
         while (this._records.length > o.maxItems) {
             const victim = byOldest()[0];
             if (!victim) break;
-            this._dropQuiet(victim.id);
-        }
-
-        let total = this._records.reduce((s, r) => s + (r.bytes || 0), 0);
-        while (total > o.maxTotalBytes) {
-            const victim = byOldest()[0];
-            if (!victim) break;
-            total -= victim.bytes || 0;
             this._dropQuiet(victim.id);
         }
     }

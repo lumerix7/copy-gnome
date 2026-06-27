@@ -47,7 +47,7 @@ If a future GNOME makes a **breaking** change that can't be hidden behind a shim
 ```json
 {
   "uuid": "copy-gnome@clipboard",
-  "name": "copy-gnome",
+  "name": "Copy GNOME",
   "description": "Wayland-native clipboard manager",
   "shell-version": ["__SHELL_VERSION__"],
   "settings-schema": "org.gnome.shell.extensions.copy-gnome",

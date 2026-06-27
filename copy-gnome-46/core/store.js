@@ -10,7 +10,8 @@ import { log } from './log.js';
 //   tmp/                   reserved for future doctor/repair tooling
 //
 // The Shell extension never rewrites, truncates, compacts, deletes, or repairs clips
-// files. Bad tail lines are ignored on load and left for a future doctor repair command.
+// files. If the newest line is bad, startup begins with empty history and leaves repair to a
+// future doctor command.
 
 Gio._promisify(Gio.File.prototype, 'read_async', 'read_finish');
 Gio._promisify(Gio.InputStream.prototype, 'read_bytes_async', 'read_bytes_finish');
@@ -18,8 +19,9 @@ Gio._promisify(Gio.OutputStream.prototype, 'write_bytes_async', 'write_bytes_fin
 Gio._promisify(Gio.OutputStream.prototype, 'close_async', 'close_finish');
 Gio._promisify(Gio.File.prototype, 'append_to_async', 'append_to_finish');
 
-const DEFAULT_TAIL_BYTES = 16 * 1024 * 1024;
-const FINAL_FLUSH_MAX_BYTES = 64 * 1024;
+// Internal hard cap on a single JSONL snapshot line. Fixed for now; intended to become a
+// configurable storage option later.
+const MAX_SNAPSHOT_LINE_BYTES = 64 * 1024 * 1024;
 const _enc = new TextEncoder();
 const _dec = new TextDecoder();
 
@@ -127,9 +129,10 @@ function normalizeSnapshot(obj, maxLineBytes) {
 }
 
 export class Store {
-    constructor({ dataDir, opts }) {
+    constructor({ dataDir, opts, onTrim }) {
         this._dir = dataDir;
         this._opts = opts;
+        this._onTrim = onTrim ?? (() => {});
         this._tmpDir = GLib.build_filenamev([dataDir, 'tmp']);
         this._pending = null;
         this._flushSource = 0;
@@ -149,8 +152,8 @@ export class Store {
         }
 
         try {
-            const text = await this._readTailText(clipPath(this._dir, fileName));
-            const records = this._parseTailSnapshot(text);
+            const line = await this._readLastLineText(clipPath(this._dir, fileName));
+            const records = this._parseSnapshotLine(line);
             log.info(`store opened: ${records.length} records from ${fileName}`);
             return records;
         } catch (e) {
@@ -167,28 +170,57 @@ export class Store {
         return names.length ? names[names.length - 1] : null;
     }
 
-    async _readTailText(path) {
+    // Read only the final snapshot line, not the whole file. The file ends with '\n' after
+    // each append, so we seek to the end and read backwards in chunks until we find the newline
+    // that ends the previous record. Newline (0x0A) never appears inside a UTF-8 multibyte
+    // sequence, so scanning raw bytes for it is safe. Reading stops once the candidate line
+    // would exceed the snapshot cap (treated as unreadable -> empty).
+    async _readLastLineText(path) {
         const file = Gio.File.new_for_path(path);
         if (!file.query_exists(null))
             return '';
         const info = file.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
         const size = Number(info.get_size());
-        const maxTailBytes = Math.max(
-            256 * 1024,
-            Math.min(DEFAULT_TAIL_BYTES, this._opts.clipLineMaxBytes * this._opts.maxLoadedLines));
-        const offset = Math.max(0, size - maxTailBytes);
+        if (size <= 0)
+            return '';
 
+        const CHUNK = 1024 * 1024;
         const stream = await file.read_async(GLib.PRIORITY_DEFAULT, null);
         try {
-            if (offset > 0)
-                stream.seek(offset, GLib.SeekType.SET, null);
-            const bytes = await stream.read_bytes_async(maxTailBytes, GLib.PRIORITY_DEFAULT, null);
-            let text = _dec.decode(bytes.get_data());
-            if (offset > 0) {
-                const firstNewline = text.indexOf('\n');
-                text = firstNewline >= 0 ? text.slice(firstNewline + 1) : '';
+            let pos = size;
+            let buf = new Uint8Array(0);    // bytes [pos, size), grown chunk-by-chunk from the end
+            while (pos > 0) {
+                const want = Math.min(CHUNK, pos);
+                const start = pos - want;
+                const chunk = await this._readChunkAt(stream, start, want);
+                if (chunk.length !== want) {
+                    // Short of a full chunk means the file shrank under us (we only ever append,
+                    // so this is unexpected). Fail closed rather than splice a gap into the line.
+                    log.warn('history file changed size while reading; starting empty');
+                    return '';
+                }
+                pos = start;
+                const merged = new Uint8Array(chunk.length + buf.length);
+                merged.set(chunk, 0);
+                merged.set(buf, chunk.length);
+                buf = merged;
+
+                // Drop a single trailing newline, then look for the newline ending the previous
+                // record; the bytes after it are the last line.
+                let end = buf.length;
+                if (buf[end - 1] === 0x0A)
+                    end--;
+                const nl = buf.lastIndexOf(0x0A, end - 1);
+                if (nl >= 0)
+                    return _dec.decode(buf.subarray(nl + 1, end));
+                if (end > MAX_SNAPSHOT_LINE_BYTES) {
+                    log.warn('latest history snapshot exceeds 64 MiB on disk; starting empty');
+                    return '';
+                }
+                if (pos === 0)
+                    return _dec.decode(buf.subarray(0, end));
             }
-            return text;
+            return '';
         } finally {
             try {
                 stream.close(null);
@@ -198,75 +230,126 @@ export class Store {
         }
     }
 
-    _parseTailSnapshot(text) {
-        const lines = text.split('\n').filter(line => line.length > 0);
-        let corruptWarnings = 0;
-        let oversizedWarnings = 0;
-        for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i];
-            if (line.length > this._opts.clipLineMaxBytes) {
-                if (oversizedWarnings++ < 3)
-                    log.warn('skipping oversized history snapshot while loading');
-                continue;
-            }
-            try {
-                const records = normalizeSnapshot(JSON.parse(line), this._opts.clipLineMaxBytes);
-                if (records)
-                    return records.slice(0, this._opts.maxLoadedLines);
-            } catch (e) {
-                // Most likely a torn final line. Ignore and keep looking within tail.
-                if (corruptWarnings++ < 3) {
-                    if (i === lines.length - 1)
-                        log.warn('ignoring corrupt final history snapshot');
-                    else
-                        log.warn(`ignoring corrupt history snapshot: ${e.message}`);
-                }
-            }
+    // Read exactly `count` bytes starting at `offset`. read_bytes_async may return fewer bytes
+    // than requested, so loop until the chunk is full or the stream ends. Returns a shorter
+    // array only on early EOF; callers treat that as fail-closed.
+    async _readChunkAt(stream, offset, count) {
+        stream.seek(offset, GLib.SeekType.SET, null);
+        const out = new Uint8Array(count);
+        let got = 0;
+        while (got < count) {
+            const bytes = await stream.read_bytes_async(count - got, GLib.PRIORITY_DEFAULT, null);
+            const data = bytes?.get_data();
+            if (!data || data.length === 0)
+                break;
+            out.set(data, got);
+            got += data.length;
         }
-        if (corruptWarnings > 3)
-            log.warn(`ignored ${corruptWarnings} corrupt history snapshots while loading`);
-        if (oversizedWarnings > 3)
-            log.warn(`ignored ${oversizedWarnings} oversized history snapshots while loading`);
+        return got === count ? out : out.subarray(0, got);
+    }
+
+    _parseSnapshotLine(line) {
+        // Simplified by design: only the newest snapshot line is considered. If it is torn,
+        // oversized, or invalid we start empty and leave older snapshots on disk for a future
+        // doctor command, rather than scanning backwards for the previous good snapshot.
+        if (!line)
+            return [];
+        if (line.length > MAX_SNAPSHOT_LINE_BYTES) {
+            log.warn('latest history snapshot is oversized; starting empty');
+            return [];
+        }
+        try {
+            const records = normalizeSnapshot(JSON.parse(line), MAX_SNAPSHOT_LINE_BYTES);
+            if (records)
+                return records;
+            log.warn('latest history snapshot is invalid; starting empty');
+        } catch (e) {
+            log.warn(`latest history snapshot is corrupt; starting empty: ${e.message}`);
+        }
         return [];
     }
 
-    appendSnapshot(records) {
+    appendSnapshot(records, gen = 0) {
         if (this._closed)
             return;
         // Store only the records reference (a shallow copy from history.list()); the expensive
         // JSON.stringify of the full history is deferred to flush()/closeSync() so the capture
         // path stays O(1) and never serializes the whole history on every copy/touch. Each call
-        // supersedes any unsaved snapshot, so we never queue stale or duplicate work.
-        this._pending = { target: currentClipName(), records };
+        // supersedes any unsaved snapshot, so we never queue stale or duplicate work. `gen` is
+        // History's change counter at snapshot time, used to detect concurrent edits in flush().
+        this._pending = { target: currentClipName(), records, gen };
         this._scheduleFlush();
     }
 
-    _lineForSnapshot(records) {
-        const snapshot = {
+    _snapshotItem(rec) {
+        return {
+            id: rec.id,
+            hash: rec.hash,
+            kind: rec.kind,
+            mime: rec.mime,
+            encoding: rec.encoding ?? (rec.data ? 'base64' : 'utf8'),
+            text: rec.text ?? null,
+            data: rec.data ?? null,
+            uri: rec.uri ?? null,
+            bytes: rec.bytes ?? 0,
+            preview: rec.preview ?? '',
+            createdAt: rec.createdAt,
+            usedAt: rec.usedAt,
+        };
+    }
+
+    _snapshotForRecords(records) {
+        return {
             type: 'history',
             version: 1,
             writtenAt: GLib.get_real_time(),
-            items: sortRecords(records).map(rec => ({
-                id: rec.id,
-                hash: rec.hash,
-                kind: rec.kind,
-                mime: rec.mime,
-                encoding: rec.encoding ?? (rec.data ? 'base64' : 'utf8'),
-                text: rec.text ?? null,
-                data: rec.data ?? null,
-                uri: rec.uri ?? null,
-                bytes: rec.bytes ?? 0,
-                preview: rec.preview ?? '',
-                createdAt: rec.createdAt,
-                usedAt: rec.usedAt,
-            })),
+            items: sortRecords(records).map(rec => this._snapshotItem(rec)),
         };
-        const line = JSON.stringify(snapshot);
-        if (line.length > this._opts.clipLineMaxBytes) {
-            log.warn(`skipping oversized history snapshot (${line.length} bytes)`);
-            return null;
+    }
+
+    _lineForSnapshot(records) {
+        return JSON.stringify(this._snapshotForRecords(records));
+    }
+
+    _byteLength(str) {
+        return _enc.encode(str).length;
+    }
+
+    // The cap is in UTF-8 bytes (what we write and what _readLastLineText budgets), not JS
+    // string length, so CJK/emoji snapshots stay readable. Trim by LRU: keep the most-recently-
+    // used prefix whose encoded size fits, using each record's own encoded size plus the
+    // envelope, so we serialize each item once instead of re-serializing the whole snapshot per
+    // dropped entry.
+    _trimRecordsForSnapshot(records) {
+        const sorted = sortRecords(records);
+        const line = this._lineForSnapshot(sorted);
+        // UTF-8 byte length is at most 3x the UTF-16 length, so if 3x already fits we are safely
+        // under the cap without encoding the whole (possibly huge) line just to count bytes.
+        if (line.length * 3 <= MAX_SNAPSHOT_LINE_BYTES)
+            return { records: sorted, line, trimmed: false };
+
+        const envelopeBytes = this._byteLength(this._lineForSnapshot([]));
+        const itemBytes = sorted.map(rec => this._byteLength(JSON.stringify(this._snapshotItem(rec))));
+        let total = envelopeBytes;
+        let kept = 0;
+        for (let i = 0; i < sorted.length; i++) {
+            const add = itemBytes[i] + (kept > 0 ? 1 : 0);   // +1 for the separating comma
+            if (total + add > MAX_SNAPSHOT_LINE_BYTES)
+                break;
+            total += add;
+            kept++;
         }
-        return line;
+
+        if (kept === sorted.length)
+            return { records: sorted, line, trimmed: false };
+        if (kept === 0) {
+            log.warn(`skipping oversized history snapshot (newest item ${itemBytes[0]} bytes exceeds 64 MiB)`);
+            return { records: [], line: null, trimmed: false };
+        }
+
+        const trimmed = sorted.slice(0, kept);
+        log.warn(`trimmed history snapshot to ${kept} entries to stay under 64 MiB`);
+        return { records: trimmed, line: this._lineForSnapshot(trimmed), trimmed: true };
     }
 
     _scheduleFlush() {
@@ -292,12 +375,15 @@ export class Store {
         this._pending = null;
         try {
             // Serialize here (debounced after the last change), not in the capture path.
-            // _lineForSnapshot returns null for an oversized snapshot (already warned); drop
-            // it without flipping the degraded flag, since this isn't an IO error.
-            const line = this._lineForSnapshot(batch.records);
+            // If the full snapshot exceeds the internal hard cap, trim oldest entries until
+            // it is writable and sync History to that trimmed set. The trimmed batch may be
+            // stale by the time the append resolves; _onTrim guards against that via batch.gen.
+            const { records, line, trimmed } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
             await this._appendTextAsync(clipPath(this._dir, batch.target), line + '\n');
+            if (trimmed)
+                this._onTrim(records, batch.gen);
             this._degraded = false;
         } catch (e) {
             if (!this._degraded) {
@@ -337,15 +423,12 @@ export class Store {
         const batch = this._pending;
         this._pending = null;
         try {
-            // Best-effort synchronous flush on teardown (see WARNING.md). Serialize here, then
-            // apply the same size cap that guards the async path.
-            const line = this._lineForSnapshot(batch.records);
+            // Best-effort synchronous flush on teardown (see WARNING.md). Serialize here under
+            // the same 64 MiB snapshot cap as the async path; whatever the trim returns is
+            // writable, so we write it rather than dropping the user's most recent changes.
+            const { line } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
-            if (line.length + 1 > FINAL_FLUSH_MAX_BYTES) {
-                log.warn(`skipping final flush: ${line.length + 1} pending bytes exceeds safety cap`);
-                return;
-            }
             const file = Gio.File.new_for_path(clipPath(this._dir, batch.target));
             const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
             stream.write_all(_enc.encode(line + '\n'), null);

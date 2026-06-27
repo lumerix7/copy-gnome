@@ -6,7 +6,7 @@
 from a **GSettings key of type `as`** (array of strings). There is no API to register a
 global Shell shortcut from a plain string at runtime without a backing schema. So:
 
-- Shortcuts are defined in a **compiled GSettings schema** shipped with the extension.
+- Keybindings are defined in a **compiled GSettings schema** shipped with the extension.
 - YAML may *mirror* them for documentation, but GSettings is authoritative.
 - The prefs GUI writes the GSettings keys (with a key-capture widget).
 

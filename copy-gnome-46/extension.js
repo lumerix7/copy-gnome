@@ -44,6 +44,13 @@ export default class CopyGnomeExtension extends Extension {
         this._store = new Store({
             dataDir: this._paths.data,
             opts: this._config.storage,
+            // Only sync the trimmed set back if History hasn't changed since the snapshot was
+            // taken; otherwise a capture that landed mid-flush would be dropped from memory.
+            // The newer pending snapshot will be flushed and re-trimmed, converging safely.
+            onTrim: (records, gen) => {
+                if (this._history && this._history.gen === gen)
+                    this._history.trimTo(records);
+            },
         });
         this._history = new History({
             opts: this._config.history,
@@ -75,7 +82,7 @@ export default class CopyGnomeExtension extends Extension {
             captureFiles: () => this._config.general.captureFiles,
             captureImages: () => this._config.general.captureImages,
             maxItemBytes: () => this._config.history.maxItemBytes,
-            maxBinaryBytes: () => this._config.storage.inlineBinaryMaxBytes,
+            maxBinaryBytes: () => this._config.storage.binaryMaxBytes,
             secretMimes: () => this._config.privacy.secretMimes,
         });
         this._monitor.start();
@@ -226,8 +233,8 @@ export default class CopyGnomeExtension extends Extension {
                     log.debug(`skipping oversized text (${size} bytes)`);
                     return;
                 }
-                if (size > cfg.storage.inlineMaxBytes) {
-                    log.warn(`skipping oversized text (${size} bytes exceeds inline cap)`);
+                if (size > cfg.storage.textMaxBytes) {
+                    log.warn(`skipping oversized text (${size} bytes exceeds text payload cap)`);
                     return;
                 }
                 this._history.add({
@@ -245,8 +252,8 @@ export default class CopyGnomeExtension extends Extension {
                     log.debug(`skipping oversized image (${u8.length} bytes)`);
                     return;
                 }
-                if (u8.length > cfg.storage.inlineBinaryMaxBytes) {
-                    log.warn(`skipping oversized image (${u8.length} bytes exceeds inline binary cap)`);
+                if (u8.length > cfg.storage.binaryMaxBytes) {
+                    log.warn(`skipping oversized image (${u8.length} bytes exceeds binary payload cap)`);
                     return;
                 }
                 const hash = sha256Bytes(u8);

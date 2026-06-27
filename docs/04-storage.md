@@ -56,8 +56,8 @@ Rules:
 - `hash` is the content identity for in-memory dedup and diagnostics.
 - A line is valid only if it parses as JSON, matches schema, and stays under configured
   size caps.
-- Invalid or truncated final lines are ignored during normal startup.
-- Normal startup reads a bounded tail and loads the newest valid snapshot line.
+- Invalid or truncated final lines make normal startup begin with empty history.
+- Normal startup reads a bounded tail and loads only the newest non-empty snapshot line.
 - Do not scan or replay the whole file during Shell startup.
 - If the current day has no clips file, normal startup may read the newest older
   `clips-*.jsonl` tail into memory, but it must not copy that data forward. Future appends
@@ -72,7 +72,7 @@ Why this shape:
 - No operation replay for item updates.
 - No move/copy/rename of old data on the normal path.
 - Append-only writes are simple; a torn write loses only the last line.
-- A corrupted final line is acceptable; it is ignored normally and can be repaired later.
+- A corrupted final line is acceptable; startup begins empty and it can be repaired later.
 - Memory is the source of truth during the session.
 
 ## In-Memory Model
@@ -80,28 +80,25 @@ Why this shape:
 The running extension keeps the actual history in memory:
 
 - `history.maxItems` caps visible history.
-- `storage.maxLoadedLines` caps how many items from the newest valid snapshot are loaded
-  into memory.
 - Only the latest unsaved full-history snapshot is kept pending; a newer snapshot
   supersedes older unsaved ones.
 - Search and popup operate only from memory.
 
-Persisted JSONL is an append-only sequence of full-history snapshots. The latest valid
-snapshot is the durable history view after restart.
+Persisted JSONL is an append-only sequence of full-history snapshots. The latest non-empty
+line is the only durable history view after restart; if it is invalid, startup begins empty.
 
 ## Startup
 
 1. Pick the current daily clips file by name, e.g. `clips-20260628.jsonl`.
 2. If it does not exist, find the newest older `clips-*.jsonl`.
-3. Read only a bounded tail window.
-4. Parse newest-to-oldest until the latest valid full-history snapshot is found or the
-   tail budget is exhausted.
+3. Read only enough tail bytes to contain one internal maximum snapshot line.
+4. Parse the newest non-empty line only.
 5. Dedup in memory by content hash if `history.dedup` is enabled.
 6. Sort by effective recency, newest first.
-7. Start with empty history if the file is missing, unreadable, or has no valid tail.
+7. Start with empty history if the file is missing, unreadable, or the newest line is invalid.
 8. Never move, copy, rewrite, or truncate old clip files during startup.
 9. Opening/creating the current day file is allowed only so future writes can append.
-10. Do not repair a bad final line during startup; just ignore it and continue.
+10. Do not repair a bad final line during startup.
 
 ## Day Switching
 
@@ -119,7 +116,7 @@ Day switching is just filename selection for future appends:
 Text and HTML:
 
 - Store inline as `text` with `encoding:"utf8"`.
-- Enforce `storage.inlineMaxBytes`.
+- Enforce `storage.textMaxBytes`.
 - Skip oversized text with a warning.
 
 Files:
@@ -136,7 +133,7 @@ Images and binary:
 - This section only applies to non-file clipboard payloads, such as screenshot bitmap bytes
   or application-provided image data.
 - Store inline as base64 in `data` with `encoding:"base64"`.
-- Enforce `storage.inlineBinaryMaxBytes` on raw bytes before base64, default 16 KiB.
+- Enforce `storage.binaryMaxBytes` on raw bytes before base64, default 16 KiB.
 - Skip oversized binary/image payloads with a warning.
 - Image/binary capture is risky on GNOME Shell 46; keep strict caps and disable it in
   config if instability returns.
@@ -230,12 +227,13 @@ The Shell extension itself should not watch old clips files and live-repair them
 
 ## Hard Caps
 
-- `storage.inlineMaxBytes`: text/HTML raw bytes, default around 64 KiB.
-- `storage.inlineBinaryMaxBytes`: non-file image/binary raw bytes before base64, default
+- `storage.textMaxBytes`: text/HTML raw bytes, default around 64 KiB.
+- `storage.binaryMaxBytes`: non-file image/binary raw bytes before base64, default
   16 KiB.
-- `storage.clipLineMaxBytes`: maximum serialized history snapshot line size.
-- `storage.maxLoadedLines`: maximum items loaded from the newest valid snapshot line.
+- Snapshot lines have an internal 64 MiB hard cap. If a snapshot would exceed it, oldest
+  entries are trimmed until it fits; actual retained count may be lower than `maxItems`.
 - `history.maxItems`: visible in-memory history cap, default 30, max 100.
+- `history.maxItemBytes`: per-item cap, default 4 MiB, max 16 MiB.
 
 ## What Not To Do
 

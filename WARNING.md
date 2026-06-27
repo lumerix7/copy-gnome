@@ -1,25 +1,23 @@
 # WARNING
 
-copy-gnome is experimental GNOME Shell code. Treat the current build as scoped to
-Ubuntu 24.04 / GNOME Shell 46 / Wayland until it has been re-tested elsewhere.
+copy-gnome is GNOME Shell extension code. Treat the current build as scoped to Ubuntu
+24.04 / GNOME Shell 46 / Wayland until it has been re-tested elsewhere.
 
 ## Why this matters
 
-This project runs inside `gnome-shell`, which is the compositor/session process. A normal
-application bug can usually crash only that application; a Shell extension bug can break
-the desktop session, leave grabs or timers behind, or force a logout/relogin recovery.
+The runtime runs inside `gnome-shell`, the compositor/session process. Fail closed:
+clipboard features may warn, skip an entry, or stop working, but they must not leave modal
+grabs, timers, signals, virtual key modifiers, or native/GI objects in a state that can
+crash or hang the Shell.
 
-Fail closed: clipboard features may warn, skip an entry, or stop working, but they must
-not risk taking down `gnome-shell`.
+## Current scope
 
-## Current safe scope
-
-The default runtime is not fully conservative while screenshot/file testing is enabled:
+The tested default runtime currently includes:
 
 - Text clipboard capture.
 - `general.captureFiles: true` stores copied-file URI/path references only.
-- `general.captureImages: true` reads screenshot/image clipboard bytes and is the
-  riskiest capture path on GNOME Shell 46.
+- `general.captureImages: true` reads screenshot/image clipboard bytes. The current path
+  has size caps, read timeouts, JS-owned byte copies, and session-local failure disable.
 - No near-caret anchoring. GNOME/Wayland caret reporting was unreliable across apps and
   repeated popup opens.
 - No delayed focus-loss watcher. The popup closes on outside click, `Esc`, or item
@@ -27,28 +25,8 @@ The default runtime is not fully conservative while screenshot/file testing is e
 - `disable()` must stay lightweight and best-effort; do not do large synchronous store,
   thumbnail, blob, or compaction work while Shell is tearing down the extension.
 
-## Known instability
-
-On GNOME Shell 46 Wayland, screenshot/image clipboard paths have already crashed
-`gnome-shell` once with `signal 11` in the old image capture implementation. The current
-test build enables image capture by default for validation, so keep recovery commands
-ready and disable it in config if instability returns.
-
-File and image capture are not production-safe yet. Image capture must copy `GLib.Bytes`
-or other GI/native boxed data into JS-owned memory immediately inside the clipboard
-callback, catch all read/write errors, and be ready to disable the extension from a
-terminal.
-
-Current image safeguards are deliberately narrow: only `image/png` clipboard payloads are
-read, raw bytes are capped by `storage.inlineBinaryMaxBytes`, reads time out, bytes are
-copied into `Uint8Array` inside the callback, and repeated image read failures disable
-image capture for the current Shell session. These JS-level guards do not protect against
-a native `gnome-shell` signal crash inside Mutter/St/GI before control returns to JS.
-
-There was also a login black-screen/login-transition incident on this machine. The logs
-looked more like GDM/Xwayland/login transition trouble than a copy-gnome failure, but the
-desktop environment should be treated as unstable until repeated login/logout testing is
-clean.
+Image capture has been stable in current local testing, but it still touches clipboard
+native/GI paths. Keep the recovery commands handy when changing that code.
 
 ## Recovery commands
 
@@ -88,8 +66,7 @@ Areas likely to drift:
 - GNOME extension lifecycle and prefs APIs.
 - Keybinding registration and conflict behavior.
 
-Consider turning risky features off after the upgrade until re-tested, especially image
-capture and any focus/caret anchoring logic.
+Consider turning image capture off after the upgrade until re-tested.
 
 ## Architecture direction
 

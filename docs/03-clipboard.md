@@ -124,9 +124,10 @@ captured payloads; oversized binary payloads are skipped).
 
 Skip capturing when any of:
 
-- The source advertises a **concealed/secret** hint mime. Honor common ones:
-  `x-kde-passwordManagerHint` (value `secret`), and GNOME's password-entry concealed
-  selections. Maintain a configurable `secretMimes` list.
+- The source advertises a **concealed/secret** hint mime and the user configured it in
+  `privacy.secretMimes`. Common optional entries include `x-kde-passwordManagerHint`
+  (value `secret`) and GNOME's password-entry concealed selections. The default list is
+  empty so password/token copies remain pasteable from history unless the user opts out.
 - Source app matches an **exclude list** (by app id / wm_class when resolvable).
 - Content matches an **exclude regex** (e.g. looks like a TOTP, credit-card pattern) -
   configurable, off by default.

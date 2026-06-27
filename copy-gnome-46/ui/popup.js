@@ -25,7 +25,7 @@ const DEFAULT_UI = {
 };
 
 // Keyboard hint shown per row, matching the number quick-paste keys (1..N, 0 for the 10th).
-// Hint shows the real row number (1..N). Pressing standalone `0` still selects row 10 — that
+// Hint shows the real row number (1..N). Pressing standalone `0` still selects row 10 - that
 // key binding lives in _onNumberPickDigit and is unchanged; only this label was "0" → "10".
 function rowHint(i) {
     return `${i + 1}`;
@@ -442,8 +442,8 @@ export class Popup {
 
         let items = [];
         try {
-            // Render every matching entry. History is already bounded by `history.maxItems`,
-            // and the list scrolls via `popupMaxHeight`, so there is no row-count limit here.
+            // Render every matching entry. History is bounded by `history.maxItems` and may
+            // be trimmed further by the store's snapshot hard cap; the list itself scrolls.
             items = this._getItems().filter(r => matches(r, query));
         } catch (e) {
             log.warn(`popup rebuild failed: ${e.message}`);

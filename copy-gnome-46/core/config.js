@@ -14,22 +14,19 @@ export const DEFAULTS = {
     },
     history: {
         maxItems: 30,
-        maxTotalBytes: 268435456,   // 256 MiB
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 0,
         dedup: true,
     },
     storage: {
         backend: 'jsonl',
-        inlineMaxBytes: 65536,      // 64 KiB
-        inlineBinaryMaxBytes: 16384,  // 16 KiB
+        textMaxBytes: 65536,        // 64 KiB
+        binaryMaxBytes: 16384,      // 16 KiB
         flushIntervalSec: 60,
         debounceMs: 500,
-        clipLineMaxBytes: 8388608,  // 8 MiB
-        maxLoadedLines: 100,
     },
     privacy: {
-        secretMimes: ['x-kde-passwordManagerHint'],
+        secretMimes: [],
     },
     ui: {
         popupWidth: 640,
@@ -61,15 +58,12 @@ export const DEFAULTS = {
 
 const LIMITS = {
     'history.maxItems': [1, 100],
-    'history.maxTotalBytes': [1024 * 1024, 1024 * 1024 * 1024],
-    'history.maxItemBytes': [1024, 64 * 1024 * 1024],
+    'history.maxItemBytes': [1024, 16 * 1024 * 1024],
     'history.maxAgeDays': [0, 3650],
-    'storage.inlineMaxBytes': [0, 1024 * 1024],
-    'storage.inlineBinaryMaxBytes': [0, 1024 * 1024],
+    'storage.textMaxBytes': [0, 1024 * 1024],
+    'storage.binaryMaxBytes': [0, 1024 * 1024],
     'storage.flushIntervalSec': [5, 3600],
     'storage.debounceMs': [100, 60000],
-    'storage.clipLineMaxBytes': [1024, 16 * 1024 * 1024],
-    'storage.maxLoadedLines': [1, 5000],
     'ui.popupWidth': [240, 900],
     'ui.popupMaxHeight': [120, 1200],
     'ui.popupOffsetX': [-1000, 1000],

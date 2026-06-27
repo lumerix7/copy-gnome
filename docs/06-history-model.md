@@ -33,10 +33,12 @@ Triggered after each insert and on a periodic check:
 
 1. Drop entries older than `maxAgeDays` (if > 0).
 2. While `count > maxItems`: remove lowest `usedAt`.
-3. While `totalBytes > maxTotalBytes`: remove lowest `usedAt`.
+3. `maxItemBytes` is enforced before insertion, so oversized items never enter history.
 
 Every history change appends a full sorted snapshot line, so delete/clear state survives
 restart as long as the latest valid snapshot line is readable (see [04](04-storage.md)).
+If the snapshot reaches the internal 64 MiB store cap, oldest entries are trimmed and the
+running history is synced to the persisted subset.
 
 ## Item actions
 
