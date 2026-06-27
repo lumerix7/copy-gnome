@@ -12,7 +12,6 @@ history:
   maxItems: 30                    # visible history count, max 100
   maxItemBytes: 4194304           # 4 MiB default; max 16 MiB
   maxAgeDays: 0                   # 0 = never expire by age
-  dedup: true
 
 storage:
   backend: jsonl

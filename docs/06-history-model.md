@@ -1,4 +1,4 @@
-# 06 - History model (MRU, dedup, eviction)
+# 06 - History model (MRU, eviction)
 
 ## In-memory model
 
@@ -7,29 +7,39 @@ This array is the source of truth; UI and store mirror it.
 
 ```
 records: [ rec0 (top/MRU), rec1, rec2, ... ]
-index:   Map<hash, rec>                          // O(1) dedup lookup
 ```
+
+There is no hash index and no content hashing. Every capture is appended as its own
+record; the only content lookup (file-twin promotion) scans the array by uri-list, which
+is bounded by `maxItems`. Each record's `id` is a `GLib.uuid_string_random()` v4 uuid -
+an opaque per-record identity for the UI/store, independent of content.
+
 
 ## MRU ordering (answers brief #2)
 
 - **New copy** → insert at front, set `usedAt = now`.
-- **Re-copy of existing content** (same hash) → **move existing record to front**,
-  update `usedAt`, do not duplicate. This is the "used history floats to the top" rule.
-- **Selecting an entry from the popup** (write-back) also counts as use → move to front,
-  update `usedAt`. So picking an old entry promotes it.
+- **Re-copy of identical content** → still a **new record** at the front. Content is
+  not merged, so the history faithfully reflects every copy action the user performed.
+- **Selecting an entry from the popup** (write-back) counts as use → move that record to
+  front, update `usedAt`. So picking an old entry promotes it.
 
 Ordering key: `usedAt` desc.
 
-## Dedup
 
-- Key = `sha256` over the **canonical bytes** (for text: utf-8 bytes; for file refs: the
-  normalized URI; for images: raw image bytes).
-- `dedup: true` (default) merges identical content. If a near-identical text differs by
-  trailing whitespace, it's still a different hash - acceptable for v1.
-- With `dedup: false`, re-copying the same content keeps a new entry each time.
-- A file copy is intentionally **not** merged with its later `text/plain` path twin (their
-  hashes differ): both entries are kept, and the file entry is promoted back above the twin
-  within a 3 s window. See [03](03-clipboard.md#capture-pipeline).
+## No content hash
+
+- Every copy is kept as its own record: copying the same thing twice yields two records.
+  This keeps the model simple and the history true to the user's actions; no content
+  identity digest is computed or stored.
+- The **self-write guard** (so the extension's own write-back is not recaptured as a new
+  entry) and the **file-twin promotion** both match on the raw clipboard content directly
+  - the text / uri-list, or the base64 payload for images. See [03](03-clipboard.md).
+- A file copy and its later `text/plain` path twin are kept as two entries; within a 3 s
+  window the file entry is promoted back above the twin (`history.touchByUri`). If no path
+  twin and no other clipboard event arrives before the window expires, the monitor adds a
+  synthetic path text entry and applies the same promotion. See
+  [03](03-clipboard.md#capture-pipeline).
+
 
 ## Eviction
 
@@ -44,10 +54,12 @@ restart as long as the latest valid snapshot line is readable (see [04](04-stora
 If the snapshot reaches the internal 64 MiB store cap, oldest entries are trimmed and the
 running history is synced to the persisted subset.
 
+
 ## Item actions
 
 - delete (single), clear-all (with confirm), edit-text (creates a new record), "copy as
   plain text" (strips html/rich).
+
 
 ## Search
 

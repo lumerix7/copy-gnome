@@ -5,15 +5,18 @@ import { log } from './log.js';
 // In-memory MRU model - the single source of truth for the running session.
 //
 // Record shape:
-//   { id, hash, kind, mime, encoding, text|null, data|null, uri|null,
+//   { id, kind, mime, encoding, text|null, data|null, uri|null,
 //     bytes, preview, createdAt, usedAt }
 //
-// Ordering: usedAt descending. Re-copying / re-selecting updates usedAt -> floats to top.
-
-let _seq = 0;
+// Ordering: usedAt descending. Re-selecting an existing entry (write-back) updates its
+// usedAt -> floats to top; re-copying instead adds a brand-new record at the top.
+// Every capture is kept as its own entry; identical content is intentionally NOT merged,
+// so the history preserves the user's actual copy actions as-is. `id` is the per-record
+// identity (a uuid) used by the UI / store. There is no content hash: the self-write guard
+// and the file-twin promotion match on the raw clipboard content / uri-list directly.
 
 function newId() {
-    return `${GLib.get_real_time().toString(36)}-${(_seq++).toString(36)}`;
+    return GLib.uuid_string_random();
 }
 
 export class History {
@@ -22,7 +25,6 @@ export class History {
         this._store = store;
         this._onChange = onChange ?? (() => {});
         this._records = [];
-        this._byHash = new Map();
         this._gen = 0;          // bumped on every mutation; lets the store detect concurrent
                                 // changes and skip a stale trim-sync (see store.flush).
     }
@@ -45,20 +47,7 @@ export class History {
 
     _replaceRecords(records) {
         this._gen++;
-        const loaded = [];
-        const seen = new Set();
-        for (const r of records) {
-            if (this._opts.dedup && seen.has(r.hash))
-                continue;
-            seen.add(r.hash);
-            loaded.push(r);
-            if (loaded.length >= this._opts.maxItems)
-                break;
-        }
-        this._records = loaded;
-        this._byHash.clear();
-        for (const r of this._records)
-            this._byHash.set(r.hash, r);
+        this._records = records.slice(0, this._opts.maxItems);
     }
 
     _sort() {
@@ -66,28 +55,15 @@ export class History {
     }
 
     /**
-     * Add/refresh an entry. `rec` carries content fields already resolved by the caller
-     * (text/data/uri, preview, bytes, hash, kind, mime).
-     * Returns the live record.
+     * Add a new entry. `rec` carries content fields already resolved by the caller
+     * (text/data/uri, preview, bytes, kind, mime). If `rec.id` is set (the capture event's
+     * uuid) it becomes the record id, threading event -> record -> logs; otherwise a fresh
+     * uuid is minted. Every call creates a distinct record; identical content is intentionally
+     * not merged. Returns the live record.
      */
     add(rec) {
         const now = GLib.get_real_time();
-        const existing = this._byHash.get(rec.hash);
-        if (existing && this._opts.dedup) {
-            existing.usedAt = now;
-            // Refresh the rendered preview so improvements to how we format an entry (e.g. a
-            // file's full path vs. basename) take effect when the same content is copied again,
-            // instead of being pinned to whatever an older capture stored.
-            if (rec.preview)
-                existing.preview = rec.preview;
-            this._sort();
-            this._persist();
-            this._onChange();
-            return existing;
-        }
-
         const record = {
-            id: newId(),
             createdAt: now,
             usedAt: now,
             encoding: rec.data ? 'base64' : 'utf8',
@@ -95,9 +71,9 @@ export class History {
             data: null,
             uri: null,
             ...rec,
+            id: rec.id ?? newId(),
         };
         this._records.push(record);
-        this._byHash.set(record.hash, record);
         this._evict();
         this._sort();
         this._persist();
@@ -114,30 +90,33 @@ export class History {
     }
 
     /**
-     * Promote the record with this hash to the front, if present. History-only reordering;
-     * never touches the system clipboard. Returns the record or null.
+     * Promote the most-recent record whose uri-list equals `uri` to the front, if present.
+     * History-only reordering; never touches the system clipboard. Returns the record or
+     * null. Used for file path twins. `_records` is kept sorted usedAt-desc after every
+     * mutation, so a plain find returns the freshest match (the set is bounded by maxItems).
      */
-    touchByHash(hash) {
-        const rec = this._byHash.get(hash);
+    touchByUri(uri) {
+        const rec = this._records.find(r => r.uri === uri) ?? null;
         if (rec)
             this.touch(rec);
-        return rec ?? null;
+        return rec;
     }
 
     remove(id) {
         const i = this._records.findIndex(r => r.id === id);
         if (i < 0) return;
-        const [r] = this._records.splice(i, 1);
-        this._byHash.delete(r.hash);
+        const [removed] = this._records.splice(i, 1);
         this._persist();
         this._onChange();
+        log.info(`history removed id=${removed.id} kind=${removed.kind} bytes=${removed.bytes}`);
     }
 
     clear() {
+        const count = this._records.length;
         this._records = [];
-        this._byHash.clear();
         this._persist();
         this._onChange();
+        log.info(`history cleared count=${count}`);
     }
 
     getById(id) {
@@ -180,7 +159,6 @@ export class History {
     _dropQuiet(id) {
         const i = this._records.findIndex(r => r.id === id);
         if (i < 0) return;
-        const [r] = this._records.splice(i, 1);
-        this._byHash.delete(r.hash);
+        this._records.splice(i, 1);
     }
 }

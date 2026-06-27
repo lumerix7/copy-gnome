@@ -11,7 +11,8 @@ standalone clipboard managers can't monitor the clipboard).
 
 - Clipboard monitoring via Mutter's `MetaSelection` (no polling) - text, copied-file
   URI references, and screenshot/image payloads are enabled by default.
-- MRU history: re-copying or re-using an entry floats it to the top; dedup by sha256.
+- MRU history: re-using an entry floats it to the top; every copy is kept as its own
+  entry.
 - Centered, searchable popup (default **Super+V**):
   - first row pre-selected → `Enter` pastes the latest entry,
   - number keys paste rows by number, e.g. **1**, **11**; standalone **0** means row 10,

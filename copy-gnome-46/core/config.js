@@ -16,7 +16,6 @@ export const DEFAULTS = {
         maxItems: 30,
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 0,
-        dedup: true,
     },
     storage: {
         backend: 'jsonl',

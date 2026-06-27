@@ -9,7 +9,8 @@
 - **Config**: YAML first, JSON accepted; keybindings in GSettings.
 - **Storage target**: daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot
   lines with bounded inline text, optional capped base64, and file URI references.
-- **Hash**: **sha256** (full 64-hex, `sha256:` prefixed); sha1 rejected (collisions).
+- **Content identity**: none - no content hash is computed or stored; the self-write
+  guard and file-twin promotion compare clipboard content directly. Record `id` is a uuid.
 - **UUID**: `copy-gnome@clipboard`.
 - **Multi-version**: one `src/`, built into `copy-gnome-46/` and `copy-gnome-50/`.
 
@@ -21,13 +22,14 @@
 | R1  | `/opt/copy-gnome` needs privileged one-time setup; users may skip it | `setup-home.sh` + clear fallback to XDG with a logged warning                                 |
 | R2  | Blocking IO in `gnome-shell` freezes the desktop                     | All IO async via Gio; `disable()` only attempts a tiny best-effort flush and skips risky work |
 | R3  | Vendored YAML parser bugs on exotic YAML                             | Keep config schema simple/flat; validate + fall back to defaults; JSON always available       |
-| R4  | Write-back re-captured as a new entry (loop)                         | Expected-hash guard around our own `set_content`                                              |
+| R4  | Write-back re-captured as a new entry (loop)                         | Monitor `_lastContent(origin=restore)` guard around our own `set_content`                     |
 | R5  | Auto-paste unreliable (focus/timing) on Wayland                      | Enabled by default for testing; restore focus before injecting; document                      |
 | R6  | Secrets captured before app sets concealed hint                      | Honor secret mimes + excludes; optional regex; document at-rest plaintext                     |
-| R7  | GNOME 50 API drift breaks build                                      | Compat shim layer; verify against 50 release notes when available                             |
-| R8  | Large image histories bloat disk                                     | Strict inline/base64 caps; oversized image/binary payloads are skipped                        |
-| R9  | Lock-screen enable/disable churn causes leaks                        | Strict timer/signal teardown; flush on every `disable()`                                      |
-| R10 | `<Super>v` keybinding conflict                                       | Configurable; detect failed registration and warn                                             |
+| R7  | `Meta.SelectionSourceMemory` may be stale replay or a valid memory-only copy | Current behavior drops memory when followed by a non-memory source, or when memory content equals `_lastContent(origin=capture)`. This is intentional replay filtering, not general dedup; repeated identical memory-only copies collapse to one visible entry. Restore echoes use `_lastContent(origin=restore)`, with a small concurrency window if another app changes the clipboard during popup restore. |
+| R8  | GNOME 50 API drift breaks build                                      | Compat shim layer; verify against 50 release notes when available                             |
+| R9  | Large image histories bloat disk                                     | Strict inline/base64 caps; oversized image/binary payloads are skipped                        |
+| R10 | Lock-screen enable/disable churn causes leaks                        | Strict timer/signal teardown; flush on every `disable()`                                      |
+| R11 | `<Super>v` keybinding conflict                                       | Configurable; detect failed registration and warn                                             |
 
 
 ## To confirm with user

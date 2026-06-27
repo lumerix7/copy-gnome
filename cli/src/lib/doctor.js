@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { RECOVERY_COMMANDS, SUPPORTED_GNOME_MAJOR } from "./constants.js";
+import { RECOVERY_COMMANDS, SUPPORTED_GNOME_MAJORS } from "./constants.js";
 import { collectLogs } from "./logs.js";
 import { canWriteDir } from "./paths.js";
 import { collectStatus } from "./status.js";
@@ -18,7 +18,7 @@ export function runDoctor(opts = {}) {
     add(checks, "system.gnome-shell", "warn", `gnome-shell --version failed: ${status.shell.error}`);
   } else if (!status.shell.supported) {
     add(checks, "system.gnome-shell", "warn",
-      `${status.shell.version}; current extension build is tested for GNOME ${SUPPORTED_GNOME_MAJOR}`);
+      `${status.shell.version}; current extension build is tested for GNOME ${SUPPORTED_GNOME_MAJORS.join(", ")}`);
   } else {
     add(checks, "system.gnome-shell", "ok", status.shell.version);
   }

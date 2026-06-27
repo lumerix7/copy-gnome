@@ -8,7 +8,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { log, setLevel } from './core/log.js';
 import { Paths } from './core/paths.js';
 import { loadConfig } from './core/config.js';
-import { sha256Text, sha256Bytes, byteLength, encodeUtf8 } from './core/hash.js';
+import { byteLength, encodeUtf8 } from './core/utf8.js';
 import { Store } from './core/store.js';
 import { History } from './core/history.js';
 import { Monitor } from './core/monitor.js';
@@ -27,6 +27,10 @@ function filePreview(uriList) {
     const uris = uriList.split('\n').filter(Boolean);
     const first = decodeURIComponent(uris[0] || '');
     return uris.length > 1 ? `${first} (+${uris.length - 1} more)` : first;
+}
+
+function uriListCount(uriList) {
+    return uriList.split('\n').filter(Boolean).length;
 }
 
 export default class CopyGnomeExtension extends Extension {
@@ -213,19 +217,25 @@ export default class CopyGnomeExtension extends Extension {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return;
             const cfg = this._config;
+            const seq = Number.isFinite(c.seq) ? c.seq : 0;
+            const seqLog = seq > 0 ? ` seq=${seq}` : '';
             if (c.kind === 'text' || c.kind === 'file') {
                 const text = c.text;
-                if (!text) return;
-                const hash = sha256Text(text);
-                if (this._monitor.consumeExpected(hash)) return;
-
+                if (!text) {
+                    log.debug(`capture skipped${seqLog} kind=${c.kind} reason=empty-text`);
+                    return;
+                }
                 const size = byteLength(text);
+
                 if (c.kind === 'file') {
-                    this._history.add({
-                        kind: 'file', mime: 'text/uri-list', hash, text: null,
+                    const preview = filePreview(text);
+                    const rec = this._history.add({
+                        id: c.id,
+                        kind: 'file', mime: 'text/uri-list', text: null,
                         encoding: 'uri',
-                        uri: text, bytes: size, preview: filePreview(text),
+                        uri: text, bytes: size, preview,
                     });
+                    log.debug(`history add${seqLog} id=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${preview}"`);
                     return;
                 }
                 if (size > cfg.history.maxItemBytes) {
@@ -236,21 +246,36 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn(`skipping oversized text (${size} bytes exceeds text payload cap)`);
                     return;
                 }
-                this._history.add({
-                    kind: 'text', mime: c.mime, hash, encoding: 'utf8', text,
+                const rec = this._history.add({
+                    id: c.id,
+                    kind: 'text', mime: c.mime, encoding: 'utf8', text,
                     bytes: size, preview: textPreview(text),
                 });
-                // This text is a file copy's later-arriving text/plain twin: bump the file
-                // entry back above it so the file stays on top. History-only; no clipboard write.
-                if (c.promoteFileUriList)
-                    this._history.touchByHash(sha256Text(c.promoteFileUriList));
+                const twinLog = c.fileTwinUriList
+                    ? ` plainFileTwin=yes synthesized=${c.synthesizedFilePath ? 'yes' : 'no'} fileUriCount=${uriListCount(c.fileTwinUriList)} filePreview="${filePreview(c.fileTwinUriList)}"`
+                    : ' plainFileTwin=no';
+                log.debug(`history add${seqLog} id=${rec.id} kind=text bytes=${size}${twinLog}`);
+                // This text is a file copy's path twin, either from the compositor's later
+                // text/plain echo or synthesized after the echo window. Keep both records,
+                // then put the file back above the path. History-only; no clipboard write.
+                if (c.fileTwinUriList) {
+                    const promoted = this._history.touchByUri(c.fileTwinUriList);
+                    const message = `history promote file${seqLog} id=${promoted?.id ?? '(none)'} afterTextId=${rec.id} synthesized=${c.synthesizedFilePath ? 'yes' : 'no'} uriCount=${uriListCount(c.fileTwinUriList)} preview="${filePreview(c.fileTwinUriList)}"`;
+                    if (promoted)
+                        log.debug(message);
+                    else
+                        log.warn(message);
+                }
             } else if (c.kind === 'image') {
                 if (!cfg.general.captureImages) {
-                    log.debug('skipping image capture; disabled');
+                    log.debug(`capture skipped${seqLog} kind=image reason=disabled`);
                     return;
                 }
                 const u8 = c.bytes;
-                if (!u8 || u8.length === 0) return;
+                if (!u8 || u8.length === 0) {
+                    log.debug(`capture skipped${seqLog} kind=image reason=empty-bytes`);
+                    return;
+                }
                 if (u8.length > cfg.history.maxItemBytes) {
                     log.debug(`skipping oversized image (${u8.length} bytes)`);
                     return;
@@ -259,14 +284,15 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn(`skipping oversized image (${u8.length} bytes exceeds binary payload cap)`);
                     return;
                 }
-                const hash = sha256Bytes(u8);
-                if (this._monitor.consumeExpected(hash)) return;
-                this._history.add({
-                    kind: 'image', mime: c.mime, hash, encoding: 'base64',
-                    data: GLib.base64_encode(u8),
+                const data = GLib.base64_encode(u8);
+                const rec = this._history.add({
+                    id: c.id,
+                    kind: 'image', mime: c.mime, encoding: 'base64',
+                    data,
                     bytes: u8.length,
                     preview: `[image ${Math.round(u8.length / 1024)} KB]`,
                 });
+                log.debug(`history add${seqLog} id=${rec.id} kind=image bytes=${u8.length}`);
             }
         } catch (e) {
             log.warn(`capture failed: ${e.message}`);
@@ -281,6 +307,13 @@ export default class CopyGnomeExtension extends Extension {
             // Only continue to MRU/paste after the clipboard write succeeds; otherwise
             // auto-paste could paste stale clipboard content.
             let wrote = false;
+            // Self-write filtering lives in the monitor: record what we are about to write
+            // (origin 'restore', sourceKind 'memory'), then write. The drain side drops the
+            // memory echo by matching this type+value. Back up first so a failed write rolls
+            // back the marker (see docs/features/clipboard-capture/clipboard-capture-design.md).
+            const backup = this._monitor.getLastContent();
+            const markSelfWrite = (type, value) =>
+                this._monitor.setLastContent({ origin: 'restore', type, value, sourceKind: 'memory', source: '(self-restore)' });
             if (rec.kind === 'image' && rec.data) {
                 if (!this._config.general.captureImages) {
                     log.warn('image restore skipped; image support is disabled');
@@ -291,17 +324,17 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn('image restore skipped; invalid base64 payload');
                     return;
                 }
-                this._monitor.expect(rec.hash);
+                markSelfWrite('image', rec.data);
                 wrote = Clipboard.setContent(rec.mime, u8);
             } else if (rec.kind === 'file' && rec.uri) {
                 if (!this._config.general.captureFiles) {
                     log.warn('file restore skipped; file support is disabled');
                     return;
                 }
-                this._monitor.expect(rec.hash);
+                markSelfWrite('file', rec.uri);
                 wrote = Clipboard.setContent('text/uri-list', encodeUtf8(rec.uri));
             } else if (rec.text != null) {
-                this._monitor.expect(rec.hash);
+                markSelfWrite('text', rec.text);
                 wrote = Clipboard.setText(rec.text);
             } else if (rec.data) {
                 const u8 = GLib.base64_decode(rec.data);
@@ -309,7 +342,7 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn('binary restore skipped; invalid base64 payload');
                     return;
                 }
-                this._monitor.expect(rec.hash);
+                markSelfWrite('binary', rec.data);
                 wrote = Clipboard.setContent(rec.mime, u8);
             } else {
                 log.warn('restore skipped; record has no payload');
@@ -317,7 +350,7 @@ export default class CopyGnomeExtension extends Extension {
             }
 
             if (!wrote) {
-                this._monitor.consumeExpected(rec.hash);
+                this._monitor.setLastContentIfIs(backup);
                 log.warn('restore aborted; clipboard write failed');
                 return;
             }
@@ -326,6 +359,7 @@ export default class CopyGnomeExtension extends Extension {
                 return;
             // Move the used entry to the front (MRU).
             this._history.touch(rec);
+            log.info(`restored id=${rec.id} kind=${rec.kind} bytes=${rec.bytes}`);
 
             // Optionally paste into the focused window after focus returns.
             if (this._config.ui.autoPaste)

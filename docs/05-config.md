@@ -77,7 +77,6 @@ history:
   maxItems: 30                      # visible history count, max 100
   maxItemBytes: 4194304             # 4 MiB default; max 16 MiB
   maxAgeDays: 0                     # 0 = no age eviction
-  dedup: true
 
 storage:
   backend: jsonl                    # jsonl | gda

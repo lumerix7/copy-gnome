@@ -44,7 +44,7 @@ export function getContentResult(mimetype, maxBytes = MAX_CONTENT_BYTES) {
                         return;
                     }
                     if (bytes.get_size() > maxBytes) {
-                        log.warn(`clipboard ${mimetype} skipped: ${bytes.get_size()} bytes exceeds cap`);
+                        log.warn(`clipboard ${mimetype} skipped: ${bytes.get_size()} bytes exceeds cap ${maxBytes} bytes`);
                         resolve({ ok: false, bytes: null, reason: 'oversize' });
                         return;
                     }

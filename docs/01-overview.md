@@ -16,8 +16,8 @@ implemented as a Shell extension so it works where standalone clipboard managers
 ## Core features (MVP)
 
 - **Clipboard monitoring** of the `CLIPBOARD` selection via Mutter's `MetaSelection`.
-- **History** with most-recently-used ordering; re-copying moves an item to the top.
-- **Dedup** by content hash.
+- **History** with most-recently-used ordering; re-using an item moves it to the top.
+  Every copy is kept as its own entry.
 - **Centered popup** opened by a global shortcut: searchable, keyboard-navigable list.
 - **Write-back**: choosing an entry restores it to the clipboard; optional auto-paste.
 - **Persistence** across login sessions, written asynchronously off the compositor's hot path.

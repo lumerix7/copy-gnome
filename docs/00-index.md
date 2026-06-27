@@ -24,21 +24,21 @@ DBus-service + GTK app.
 
 ## Reading order
 
-| #  | Doc                                    | Topic                                                              |
-|----|----------------------------------------|--------------------------------------------------------------------|
-| 01 | [overview](01-overview.md)             | Goals, scope, feature list, non-goals                              |
-| 02 | [architecture](02-architecture.md)     | Module layout, data flow, lifecycle                                |
-| 03 | [clipboard](03-clipboard.md)           | Monitoring, mime handling, write-back, paste, persistence, privacy |
-| 04 | [storage](04-storage.md)               | Append-only clips JSONL, persistence strategy, SQLite alternative  |
-| 05 | [config](05-config.md)                 | YAML/JSON config, GSettings, `COPY_GNOME_HOME` paths               |
-| 06 | [history-model](06-history-model.md)   | MRU ordering, dedup, eviction                                      |
-| 07 | [ui](07-ui.md)                         | Caret/window popup, panel indicator, search, prefs window          |
-| 08 | [keybindings](08-keybindings.md)       | Global shortcuts, GSettings constraint                             |
-| 09 | [multi-version](09-multi-version.md)   | Single source vs per-version dirs, 46↔50 compat                    |
-| 10 | [packaging](10-packaging.md)           | Build, pack, install, schema compile, Wayland reload               |
-| 11 | [open-questions](11-open-questions.md) | Decisions to confirm, risks                                        |
-| 12 | [cli](12-cli.md)                       | CLI + DBus interface + doctor diagnostics                          |
-| 13 | [troubleshooting](13-troubleshooting.md) | Known log noise and diagnosis notes                              |
+| #  | Doc                                      | Topic                                                              |
+|----|------------------------------------------|--------------------------------------------------------------------|
+| 01 | [overview](01-overview.md)               | Goals, scope, feature list, non-goals                              |
+| 02 | [architecture](02-architecture.md)       | Module layout, data flow, lifecycle                                |
+| 03 | [clipboard](03-clipboard.md)             | Monitoring, mime handling, write-back, paste, persistence, privacy |
+| 04 | [storage](04-storage.md)                 | Append-only clips JSONL, persistence strategy, SQLite alternative  |
+| 05 | [config](05-config.md)                   | YAML/JSON config, GSettings, `COPY_GNOME_HOME` paths               |
+| 06 | [history-model](06-history-model.md)     | MRU ordering, eviction                                             |
+| 07 | [ui](07-ui.md)                           | Caret/window popup, panel indicator, search, prefs window          |
+| 08 | [keybindings](08-keybindings.md)         | Global shortcuts, GSettings constraint                             |
+| 09 | [multi-version](09-multi-version.md)     | Single source vs per-version dirs, 46↔50 compat                    |
+| 10 | [packaging](10-packaging.md)             | Build, pack, install, schema compile, Wayland reload               |
+| 11 | [open-questions](11-open-questions.md)   | Decisions to confirm, risks                                        |
+| 12 | [cli](12-cli.md)                         | CLI + DBus interface + doctor diagnostics                          |
+| 13 | [troubleshooting](13-troubleshooting.md) | Known log noise and diagnosis notes                                |
 
 
 ## Quick answers to the brief
@@ -46,7 +46,7 @@ DBus-service + GTK app.
 | Question                | Decision                                                                                                                                                                      | Doc                                              |
 |-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
 | 1. Config format        | **YAML first**, JSON also accepted; keybindings live in GSettings (Shell requirement). Optional prefs GUI.                                                                    | [05](05-config.md)                               |
-| 2. History MRU          | In-memory ordered list; re-copying an existing entry moves it to front (dedup by content hash).                                                                               | [06](06-history-model.md)                        |
+| 2. History MRU          | In-memory ordered list; re-using an entry moves it to front. Every copy is kept as its own entry.                                                                             | [06](06-history-model.md)                        |
 | 3. Inline vs path       | Target storage keeps bounded text **inline**; copied disk files, including image files, store only **URI/path references**; only non-file image/binary may use capped base64. | [04](04-storage.md)                              |
 | 4. SQLite vs JSONL      | **Daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot lines** in pure GJS - zero native deps.                                                                      | [04](04-storage.md)                              |
 | 5. Keybindings + popup  | Global keybinding opens a centered `St` popup over the focused window's monitor, with modal keyboard grab.                                                                    | [07](07-ui.md), [08](08-keybindings.md)          |

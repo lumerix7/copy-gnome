@@ -20,6 +20,7 @@ Target storage should be simple and Shell-safe:
 
 Current code uses this append-only clips JSONL layout.
 
+
 ## Layout
 
 ```
@@ -36,24 +37,25 @@ If the `/opt/copy-gnome/$USER` default is not writable and no explicit
 Use daily files by default. That keeps individual append-only files bounded without suffix
 rollover logic.
 
+
 ## Snapshot Line
 
 `clips-YYYYMMDD.jsonl` is append-only. Each line is one full history snapshot:
 
 ```json
-{"type":"history","version":1,"writtenAt":1782610200000000,"items":[{"id":"01J1EXAMPLE0000000000000000","hash":"f80b...","kind":"text","mime":"text/plain;charset=utf-8","encoding":"utf8","text":"hello","data":null,"uri":null,"bytes":5,"preview":"hello","createdAt":1782610000000000,"usedAt":1782610100000000}]}
+{"type":"history","version":1,"writtenAt":1782610200000000,"items":[{"id":"6b6e...uuid","kind":"text","mime":"text/plain;charset=utf-8","encoding":"utf8","text":"hello","data":null,"uri":null,"bytes":5,"preview":"hello","createdAt":1782610000000000,"usedAt":1782610100000000}]}
 ```
 
 Binary/image example:
 
 ```json
-{"type":"history","version":1,"writtenAt":1782610200000000,"items":[{"id":"01J1EXAMPLE0000000000000001","hash":"a12b...","kind":"image","mime":"image/png","encoding":"base64","text":null,"data":"iVBORw0KGgo...","uri":null,"bytes":12345,"preview":"image/png 12345 bytes","createdAt":1782610000000000,"usedAt":1782610000000000}]}
+{"type":"history","version":1,"writtenAt":1782610200000000,"items":[{"id":"a12b...uuid","kind":"image","mime":"image/png","encoding":"base64","text":null,"data":"iVBORw0KGgo...","uri":null,"bytes":12345,"preview":"image/png 12345 bytes","createdAt":1782610000000000,"usedAt":1782610000000000}]}
 ```
 
 Rules:
 
-- `id` is the stable record identity for UI/CLI actions.
-- `hash` is the content identity for in-memory dedup and diagnostics.
+- `id` is the stable record identity for UI/CLI actions (a uuid). There is no content
+  hash field; the self-write guard matches the clipboard content directly.
 - A line is valid only if it parses as JSON, matches schema, and stays under configured
   size caps.
 - Invalid or truncated final lines make normal startup begin with empty history.
@@ -75,6 +77,7 @@ Why this shape:
 - A corrupted final line is acceptable; startup begins empty and it can be repaired later.
 - Memory is the source of truth during the session.
 
+
 ## In-Memory Model
 
 The running extension keeps the actual history in memory:
@@ -87,18 +90,19 @@ The running extension keeps the actual history in memory:
 Persisted JSONL is an append-only sequence of full-history snapshots. The latest non-empty
 line is the only durable history view after restart; if it is invalid, startup begins empty.
 
+
 ## Startup
 
 1. Pick the current daily clips file by name, e.g. `clips-20260628.jsonl`.
 2. If it does not exist, find the newest older `clips-*.jsonl`.
 3. Read only enough tail bytes to contain one internal maximum snapshot line.
 4. Parse the newest non-empty line only.
-5. Dedup in memory by content hash if `history.dedup` is enabled.
-6. Sort by effective recency, newest first.
-7. Start with empty history if the file is missing, unreadable, or the newest line is invalid.
-8. Never move, copy, rewrite, or truncate old clip files during startup.
-9. Opening/creating the current day file is allowed only so future writes can append.
-10. Do not repair a bad final line during startup.
+5. Sort by effective recency, newest first.
+6. Start with empty history if the file is missing, unreadable, or the newest line is invalid.
+7. Never move, copy, rewrite, or truncate old clip files during startup.
+8. Opening/creating the current day file is allowed only so future writes can append.
+9. Do not repair a bad final line during startup.
+
 
 ## Day Switching
 
@@ -110,6 +114,7 @@ Day switching is just filename selection for future appends:
 - No old file is moved, copied, truncated, or rewritten during the switch.
 - There is no size-based suffix rollover in v1. If a daily file grows too large, `doctor`
   can report it; the Shell extension still only appends.
+
 
 ## Payload Storage
 
@@ -144,6 +149,7 @@ Base64 tradeoff:
   consistency.
 - This is acceptable only with strict size caps.
 
+
 ## Write Path
 
 Hot path:
@@ -171,6 +177,7 @@ Flush policy:
 This means newest pending lines may be lost on crash, logout, lock-screen teardown, disk
 full, or Shell restart. That is acceptable for this design.
 
+
 ## Actions and Durability
 
 For v1, persisted storage is state-oriented:
@@ -180,6 +187,7 @@ For v1, persisted storage is state-oriented:
 - Delete/clear/edit append a full sorted history snapshot.
 
 This avoids turning the store back into an operation log.
+
 
 ## Writer Ownership
 
@@ -197,6 +205,7 @@ Rules:
 
 If a future direct multi-process writer is added, introduce a bounded `/tmp` runtime lock
 then. Do not add that complexity to the v1 Shell writer.
+
 
 ## Cleanup
 
@@ -225,6 +234,7 @@ After `doctor repair` changes a clips file, it can ask the running extension to 
 history through the extension service, or tell the user to disable/enable the extension.
 The Shell extension itself should not watch old clips files and live-repair them.
 
+
 ## Hard Caps
 
 - `storage.textMaxBytes`: text/HTML raw bytes, default around 64 KiB.
@@ -234,6 +244,7 @@ The Shell extension itself should not watch old clips files and live-repair them
   entries are trimmed until it fits; actual retained count may be lower than `maxItems`.
 - `history.maxItems`: visible in-memory history cap, default 30, max 100.
 - `history.maxItemBytes`: per-item cap, default 4 MiB, max 16 MiB.
+
 
 ## What Not To Do
 
@@ -249,6 +260,7 @@ The Shell extension itself should not watch old clips files and live-repair them
 - Do not block `gnome-shell` teardown for persistence.
 - Do not add a filesystem lock for the single Shell writer.
 - Do not keep `GLib.Bytes` or other GI/native objects across async boundaries.
+
 
 ## Old Layout Cleanup
 

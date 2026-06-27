@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { GSETTINGS_SCHEMA, GSETTINGS_TOGGLE_POPUP, SUPPORTED_GNOME_MAJOR, UUID } from "./constants.js";
+import { GSETTINGS_SCHEMA, GSETTINGS_TOGGLE_POPUP, SUPPORTED_GNOME_MAJORS, UUID } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { inspectLatestClip } from "./clips.js";
 import { installedExtensionDir, resolveDataPaths, schemaDir, sourceExtensionDir } from "./paths.js";
@@ -31,14 +31,14 @@ export function collectStatus() {
       ok: shellVersion.ok,
       version: (shellVersion.stdout || shellVersion.stderr).trim() || null,
       major: gnomeMajor,
-      supported: gnomeMajor === SUPPORTED_GNOME_MAJOR,
+      supported: SUPPORTED_GNOME_MAJORS.includes(gnomeMajor),
       error: shellVersion.ok ? null : resultText(shellVersion),
     },
     extension: {
       uuid: UUID,
       installed: extensionInstalled,
       dir: extensionDir,
-      sourceDir: sourceExtensionDir(gnomeMajor || SUPPORTED_GNOME_MAJOR),
+      sourceDir: sourceExtensionDir(gnomeMajor || SUPPORTED_GNOME_MAJORS[0]),
       metadata,
       infoOk: extensionInfo.ok,
       info: extensionState,

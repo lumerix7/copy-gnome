@@ -21,13 +21,13 @@ the new contents asynchronously.
 
 Two viable read paths:
 
-- **`St.Clipboard`** (simplest): `get_text()`, and `get_content(mimetype, cb)` /
-  `get_content()` returning `GLib.Bytes` for arbitrary mimes. Enumerate offered mimes
-  via the `Meta.Selection` source (`source.get_mimetypes()`).
+- **`Meta.SelectionSource`**: each `owner-changed` event provides a source. The monitor
+  enqueues that source and reads its content via `source.read_async(mimetype, ...)` /
+  `read_finish()`, so FIFO queue order and clipboard content stay tied to the same event.
 - **`Meta.Selection.get_async()`** for lower-level control (stream-based).
 
 Recommended: query `source.get_mimetypes()` to decide the type, then read the *best*
-representation with `St.Clipboard.get_content()`.
+representation from that same queued `source`.
 
 
 ### Mime priority
@@ -49,18 +49,26 @@ write-back** when feasible:
 ## Capture pipeline
 
 `owner-changed` → read mimes → classify → **privacy filter** → build a candidate entry
-→ **dedup** (hash, when `history.dedup` is on) → either move-to-front (existing) or
-insert-at-front (new) in `history.js` → mark store dirty.
+→ **insert at front** of `history.js` as a new record (every capture is kept)
+→ mark store dirty.
+
+Monitor queue processing is read-only: it never writes back to the system clipboard, never
+merges duplicate content, and never computes/stores a content hash. Clipboard writes happen
+only when the user activates an existing history entry.
 
 A file copy emits **two** `owner-changed` events: first carrying
 `text/uri-list`/`x-special` (stored as a **file** entry whose `preview` is the full
-`file://...` URI), then a follow-up exposing only `text/plain` — the **bare path**, no
+`file://...` URI), then a follow-up exposing only `text/plain` - the **bare path**, no
 scheme (stored as a normal **text** entry, so the path can be pasted into editors). Both
 are kept; they are not merged, since the user may want either representation. When the
 second event arrives within a short window (`FILE_ECHO_TTL_MS`, 3 s) and matches the
-just-captured file's path, the file entry is promoted back to the front so it stays
-**above** its later text twin. This recognition + reordering is history-only and **never
-writes the clipboard** (the system already holds the real targets).
+just-captured file's path, that remembered file state is consumed once and the file entry is
+promoted back to the front so it stays **above** its later text twin. This recognition +
+reordering is history-only and **never writes the clipboard** (the system already holds the
+real targets). If the path twin does not arrive and no other clipboard event arrives before
+the 3 s window expires, the monitor synthesizes the same path text entry in history and then
+promotes the file entry above it. If any other clipboard event arrives first, the remembered
+file state is cleared and no synthetic path is added.
 
 Non-text clipboard capture is enabled by default in the current test build. On GNOME
 Shell 46 Wayland, screenshot tools can place transient image data on the clipboard, and
@@ -71,9 +79,10 @@ bounded bytes and should be disabled in config if instability returns.
 
 ### Avoiding self-induced loops
 
-When *we* set the clipboard (write-back), that triggers `owner-changed` again. Guard
-with a short-lived flag / expected-hash so our own writes aren't re-captured as new
-entries.
+When *we* set the clipboard (write-back), that triggers `owner-changed` again. Guard by
+remembering the exact content we just wrote in the monitor's single `_lastContent` slot
+(`origin=restore`, short TTL). The next queued read whose content matches that slot is
+skipped before it reaches history, so our own writes aren't re-captured as new entries.
 
 
 ## Write-back
@@ -87,8 +96,8 @@ cb.set_content(St.ClipboardType.CLIPBOARD, mimetype, bytes);   // or set_text() 
 
 For file entries, the current build sets **`text/uri-list` only** (Nautilus and many file
 managers accept it for a paste). Offering `x-special/gnome-copied-files` (the
-`copy\n<uri>` payload) and `text/plain` *together* — so every file manager pastes the file
-and editors paste the path from the same entry — requires a multi-mime
+`copy\n<uri>` payload) and `text/plain` *together* - so every file manager pastes the file
+and editors paste the path from the same entry - requires a multi-mime
 `Meta.SelectionSource` (`St.Clipboard.set_content` sets only one mime and replaces on each
 call). That is a planned enhancement, not yet implemented.
 

@@ -67,7 +67,7 @@ function clipPath(dir, name) {
 function normalizeRecord(obj, maxLineBytes) {
     if (!obj || typeof obj !== 'object')
         return null;
-    if (typeof obj.id !== 'string' || typeof obj.hash !== 'string')
+    if (typeof obj.id !== 'string')
         return null;
     if (!['text', 'html', 'file', 'image', 'binary'].includes(obj.kind))
         return null;
@@ -80,7 +80,6 @@ function normalizeRecord(obj, maxLineBytes) {
 
     const rec = {
         id: obj.id,
-        hash: obj.hash,
         kind: obj.kind,
         mime: obj.mime,
         encoding: obj.encoding,
@@ -284,7 +283,6 @@ export class Store {
     _snapshotItem(rec) {
         return {
             id: rec.id,
-            hash: rec.hash,
             kind: rec.kind,
             mime: rec.mime,
             encoding: rec.encoding ?? (rec.data ? 'base64' : 'utf8'),

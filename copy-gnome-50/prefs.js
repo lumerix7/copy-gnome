@@ -352,8 +352,6 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         group.add(this._spinRow('maxAgeDays', 'Expire after days (0 = never)', 0, 3650, 1,
             'history', v => v, v => Math.round(v),
             '0 keeps entries forever by age.'));
-        group.add(this._boolRow('dedup', 'Deduplicate by content hash',
-            'Merge identical entries (same sha256). Recommended.', 'history'));
 
         page.add(group);
         return page;

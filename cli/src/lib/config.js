@@ -13,7 +13,6 @@ export const DEFAULTS = {
     maxItems: 30,
     maxItemBytes: 4194304,
     maxAgeDays: 0,
-    dedup: true,
   },
   storage: {
     backend: "jsonl",
@@ -78,7 +77,6 @@ export const CONFIG_KEYS = [
   "history.maxItems",
   "history.maxItemBytes",
   "history.maxAgeDays",
-  "history.dedup",
   "storage.backend",
   "storage.textMaxBytes",
   "storage.binaryMaxBytes",

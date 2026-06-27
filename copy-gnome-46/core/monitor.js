@@ -2,23 +2,27 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import { log } from './log.js';
-import * as Clipboard from './clipboard.js';
 
 // Watches Mutter's selection for clipboard-owner changes (the Wayland-correct way; no
-// polling). On each change it reads the new contents, classifies them, and hands a
-// normalized candidate to `onCapture`.
+// polling). Producer/consumer split: _onOwnerChanged (enqueue side) only snapshots the
+// synchronously-available fields (sourceKind, mimes) and pushes a job; the drain loop
+// (consumer side) reads the content, compares it against _lastContent, and either drops
+// (self-write echo or stale memory replay) or captures.
 //
-// Candidate shapes:
-//   { kind: 'text', mime, text }
-//   { kind: 'file', mime: 'text/uri-list', text }   // text = newline-joined uris
-//   { kind: 'image', mime, bytes }                  // bytes = JS-owned Uint8Array
+// Candidate shapes handed to onCapture:
+//   { kind: 'text',  id, seq, mime, text }
+//   { kind: 'file',  id, seq, mime: 'text/uri-list', text }   // text = newline-joined uris
+//   { kind: 'image', id, seq, mime, bytes }                   // bytes = JS-owned Uint8Array
 //
-// Self-write guard: when we restore an entry we call expect(hash); the next capture whose
-// hash matches is swallowed so our own writes don't re-enter the history.
+// `id` is a uuid minted when the owner-changed is received; for a captured event it becomes
+// the history record's id, so one id threads event -> record -> logs.
+// See docs/features/clipboard-capture/clipboard-capture-design.md.
 
-const EXPECT_TTL_MS = 2500;
 const FILE_ECHO_TTL_MS = 3000;
 const IMAGE_READ_FAILURE_LIMIT = 3;
+const READ_TIMEOUT_MS = 2000;
+const READ_CHUNK_BYTES = 64 * 1024;
+const DEBUG_TEXT_CHARS = 160;
 
 function supportedImageMime(mimes) {
     // Keep the Shell-side image path narrow. Screenshots on GNOME normally offer PNG;
@@ -26,15 +30,80 @@ function supportedImageMime(mimes) {
     return mimes.includes('image/png') ? 'image/png' : null;
 }
 
-// Canonical form for a uri-list: drop CRs/blank lines and trim each entry. Used as the file
-// entry's stored content and hash input; keeping it canonical also lets the later text/plain
-// twin's promotion (touchByHash) find that file entry by the same hash.
+const TEXT_MIMES = ['text/plain;charset=utf-8', 'text/plain', 'UTF8_STRING'];
+
+function textMime(mimes) {
+    return TEXT_MIMES.find(m => mimes.includes(m)) ?? null;
+}
+
+function debugText(text) {
+    return text
+        .slice(0, DEBUG_TEXT_CHARS)
+        .replace(/\\/g, '\\\\')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t') + (text.length > DEBUG_TEXT_CHARS ? '...' : '');
+}
+
+function debugContent(type, value) {
+    return `type=${type} bytes=${new TextEncoder().encode(value).length} value="${debugText(value)}"`;
+}
+
+function debugSource(source) {
+    try {
+        return String(source).slice(0, DEBUG_TEXT_CHARS);
+    } catch (e) {
+        return '(source)';
+    }
+}
+
+// memory = Shell-owned (our own writes, screenshots, Mutter caches); everything else
+// (Wayland / X11 clients) is a real external copy.
+function sourceKindFromLabel(label) {
+    return label.includes('SelectionSourceMemory') ? 'memory' : 'non-memory';
+}
+
+function uriListEntries(uriListText) {
+    return uriListText
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+}
+
+// Canonical form for a uri-list: drop CRs/blank lines and trim each entry. Used as the
+// file entry's stored content and for matching a later text/plain path twin.
 function normalizeUriList(text) {
     return text
         .split('\n')
         .map(line => line.replace(/\r$/, '').trim())
         .filter(Boolean)
         .join('\n');
+}
+
+function normalizeSpecialCopiedFiles(text) {
+    const lines = text
+        .split('\n')
+        .map(line => line.replace(/\r$/, '').trim())
+        .filter(Boolean);
+    if (lines.length > 0 && ['copy', 'cut'].includes(lines[0]))
+        lines.shift();
+    return normalizeUriList(lines.join('\n'));
+}
+
+function filePathText(uriListText) {
+    const paths = [];
+    for (const line of uriListEntries(uriListText)) {
+        if (!line.startsWith('file://')) {
+            paths.push(line);
+            continue;
+        }
+        try {
+            paths.push(decodeURIComponent(line.replace(/^file:\/\//, '')));
+        } catch (e) {
+            log.debug(`file path decode failed uri="${debugText(line)}": ${e.message}`);
+        }
+    }
+    return paths.join('\n');
 }
 
 // Every string form by which a file copy's follow-up text/plain owner-changed can refer to
@@ -65,8 +134,8 @@ export class Monitor {
     constructor({
         onCapture, captureFiles, captureImages, maxItemBytes,
         maxBinaryBytes, secretMimes,
-    }) {
-        this._onCapture = onCapture;
+    } = {}) {
+        this._onCapture = typeof onCapture === 'function' ? onCapture : (() => {});
         this._captureFiles = captureFiles ?? (() => false);
         this._captureImages = captureImages ?? (() => false);
         this._maxItemBytes = maxItemBytes ?? (() => 16 * 1024 * 1024);
@@ -74,11 +143,11 @@ export class Monitor {
         this._secretMimes = secretMimes ?? (() => []);
         this._selection = null;
         this._ownerChangedId = 0;
-        this._expected = new Map();   // hash -> GLib source id (timeout)
-        this._fileEcho = new Map();   // file path/uri string -> GLib source id (timeout)
-        this._fileEchoUri = new Map(); // same key -> the file copy's uri-list (for promotion)
-        this._reading = false;
-        this._pendingSource = null;
+        this._lastContent = null;     // { id, origin, sourceKind, source, type, value }
+        this._lastFile = null;        // { uriList, keys, pathText, seq, timeoutId } for file text/plain twin
+        this._queue = [];             // FIFO owner-change jobs
+        this._nextJobSeq = 1;
+        this._processing = false;
         this._imageReadFailures = 0;
         this._imageCaptureDisabled = false;
         this._stopped = true;
@@ -101,7 +170,9 @@ export class Monitor {
 
     stop() {
         this._stopped = true;
-        this._pendingSource = null;
+        this._queue = [];
+        this._nextJobSeq = 1;
+        log.debug(`monitor stopping queueCleared=yes lastContent=${this._lastContent ? 'yes' : 'no'}`);
         if (this._ownerChangedId) {
             try {
                 this._selection?.disconnect(this._ownerChangedId);
@@ -111,69 +182,142 @@ export class Monitor {
             this._ownerChangedId = 0;
         }
         this._selection = null;
-        for (const id of this._expected.values()) {
-            try {
-                GLib.Source.remove(id);
-            } catch (e) {
-                log.debug(`expected timer cleanup failed: ${e.message}`);
-            }
+        this._lastContent = null;
+        this._clearLastFile();
+    }
+
+    // --- self-write / last-content state (see design.md) ---
+
+    /** @returns {object|null} the current _lastContent snapshot. */
+    getLastContent() {
+        return this._lastContent;
+    }
+
+    /**
+     * Record the last clipboard content we wrote (origin 'restore') or captured (origin
+     * 'capture'). The drain side compares an incoming memory event against this to drop our
+     * own restore echo or a stale memory replay. No TTL: every capture overwrites it.
+     */
+    setLastContent({ id, origin, sourceKind = null, source = null, type = null, value }) {
+        this._lastContent = {
+            id: id ?? GLib.uuid_string_random(),
+            origin,
+            sourceKind,
+            source,
+            type,
+            value,
+        };
+        log.debug(`last content set id=${this._lastContent.id} origin=${origin} sourceKind=${sourceKind} ${debugContent(type, value ?? '')}`);
+        return this._lastContent;
+    }
+
+    /** Roll back to `backup` iff the current _lastContent is still a restore marker. */
+    setLastContentIfIs(backup) {
+        if (this._lastContent?.origin === 'restore') {
+            log.debug(`last content rolled back from origin=restore to ${backup ? `origin=${backup.origin}` : 'null'}`);
+            this._lastContent = backup ?? null;
         }
-        this._expected.clear();
-        for (const id of this._fileEcho.values()) {
+    }
+
+    /**
+     * Drop reason for `candidate` produced by `job`, else ''. A memory event whose content
+     * (type + value) matches _lastContent is our own write-back echo (origin 'restore') or a
+     * stale memory replay (origin 'capture'). Non-memory events are never dropped here, so
+     * ordinary repeated copies are not deduped.
+     */
+    _dropReason(job, candidate) {
+        const last = this._lastContent;
+        if (job.sourceKind === 'memory' && last &&
+                candidate.kind === last.type && candidate.value === last.value)
+            return last.origin === 'restore' ? 'echo' : 'stale-replay';
+        return '';
+    }
+
+    // --- file text/plain twin window ---
+
+    /** Remember, for FILE_ECHO_TTL_MS, that a file copy's text/plain twin may follow. */
+    _rememberLastFile(uriListText, seq) {
+        if (typeof uriListText !== 'string' || uriListText.length === 0)
+            return;
+        this._clearLastFile();
+        const pathText = filePathText(uriListText);
+        const timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FILE_ECHO_TTL_MS, () => {
+            if (this._lastFile?.timeoutId !== timeoutId)
+                return GLib.SOURCE_REMOVE;
+            this._lastFile = null;
+            if (!this._stopped && pathText) {
+                const id = GLib.uuid_string_random();
+                log.debug(`file twin window expired; synthesizing path id=${id} seq=${seq} bytes=${new TextEncoder().encode(pathText).length} uriCount=${uriListEntries(uriListText).length} path="${debugText(pathText)}" uriList="${debugText(uriListText)}"`);
+                this._onCapture({
+                    kind: 'text',
+                    id,
+                    seq,
+                    mime: 'text/plain;charset=utf-8',
+                    text: pathText,
+                    fileTwinUriList: uriListText,
+                    synthesizedFilePath: true,
+                });
+            } else {
+                log.debug(`file twin window expired; no path synthesized stopped=${this._stopped ? 'yes' : 'no'} uriCount=${uriListEntries(uriListText).length} uriList="${debugText(uriListText)}"`);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+        this._lastFile = {
+            uriList: uriListText,
+            keys: fileEchoKeys(uriListText),
+            pathText,
+            seq,
+            timeoutId,
+        };
+        log.debug(`file twin window armed ttlMs=${FILE_ECHO_TTL_MS} seq=${seq} uriCount=${uriListEntries(uriListText).length} path="${debugText(pathText)}" uriList="${debugText(uriListText)}"`);
+    }
+
+    _clearLastFile() {
+        if (this._lastFile?.timeoutId) {
+            const uriList = this._lastFile.uriList;
             try {
-                GLib.Source.remove(id);
+                GLib.Source.remove(this._lastFile.timeoutId);
             } catch (e) {
                 log.debug(`file echo timer cleanup failed: ${e.message}`);
             }
+            log.debug(`file twin window cleared uriCount=${uriListEntries(uriList).length} uriList="${debugText(uriList)}"`);
         }
-        this._fileEcho.clear();
-        this._fileEchoUri.clear();
-    }
-
-    /** Mark a hash as self-induced so the resulting capture is ignored. */
-    expect(hash) {
-        if (this._expected.has(hash))
-            GLib.Source.remove(this._expected.get(hash));
-        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, EXPECT_TTL_MS, () => {
-            this._expected.delete(hash);
-            return GLib.SOURCE_REMOVE;
-        });
-        this._expected.set(hash, id);
-    }
-
-    /** @returns {boolean} true if `hash` was expected (and consumes it). */
-    consumeExpected(hash) {
-        if (!this._expected.has(hash)) return false;
-        GLib.Source.remove(this._expected.get(hash));
-        this._expected.delete(hash);
-        return true;
-    }
-
-    /** Remember, for FILE_ECHO_TTL_MS, that a file copy's text/plain twin may follow. */
-    _armFileEcho(uriListText) {
-        for (const key of fileEchoKeys(uriListText)) {
-            if (this._fileEcho.has(key))
-                GLib.Source.remove(this._fileEcho.get(key));
-            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FILE_ECHO_TTL_MS, () => {
-                this._fileEcho.delete(key);
-                this._fileEchoUri.delete(key);
-                return GLib.SOURCE_REMOVE;
-            });
-            this._fileEcho.set(key, id);
-            this._fileEchoUri.set(key, uriListText);
-        }
+        this._lastFile = null;
     }
 
     /** @returns {string|null} the file copy's uri-list if `text` is its twin, else null. */
-    _fileEchoMatch(text) {
-        return this._fileEchoUri.get(text.trim()) ?? null;
+    _consumeLastFileMatch(text) {
+        if (!this._lastFile) {
+            log.debug(`file twin check miss reason=no-window text="${debugText(text)}"`);
+            return null;
+        }
+        if (!this._lastFile.keys.has(text.trim())) {
+            log.debug(`file twin check miss reason=not-same-path text="${debugText(text)}" uriList="${debugText(this._lastFile.uriList)}"`);
+            this._clearLastFile();
+            return null;
+        }
+        const uriList = this._lastFile.uriList;
+        this._clearLastFile();
+        log.debug(`file twin check hit text="${debugText(text)}" uriList="${debugText(uriList)}"`);
+        return uriList;
+    }
+
+    _readSourceMimes(source) {
+        try {
+            return (source.get_mimetypes() ?? []).filter(m => typeof m === 'string');
+        } catch (e) {
+            return [];
+        }
     }
 
     /** Capture a file uri-list, arming the echo window so its text/plain twin is recognized. */
-    _captureFile(text) {
-        this._armFileEcho(text);
-        this._onCapture({ kind: 'file', mime: 'text/uri-list', text });
+    _captureFile(text, id, seq) {
+        this._rememberLastFile(text, seq);
+        log.debug(`capture file id=${id} seq=${seq} bytes=${new TextEncoder().encode(text).length} uriCount=${uriListEntries(text).length} uriList="${debugText(text)}"`);
+        this._onCapture({ kind: 'file', id, seq, mime: 'text/uri-list', text });
     }
+
+    // --- enqueue side (producer): only snapshots sync fields and pushes ---
 
     _onOwnerChanged(selType, source) {
         if (this._stopped)
@@ -184,43 +328,58 @@ export class Monitor {
             if (selType !== Meta.SelectionType.SELECTION_CLIPBOARD) return;
             if (!source) return;   // selection cleared
 
-            this._read(source).catch(e => log.warn(`read failed: ${e.message}`));
+            this._queueRead(source);
         } catch (e) {
             log.warn(`owner change ignored: ${e.message}`);
         }
     }
 
-    // Remember the newest owner and ensure exactly one read loop runs. A change that arrives
-    // while a read is in flight updates _pendingSource instead of being dropped, so the
-    // newest clipboard contents always reach the history. (Previously rapid successive copies
-    // during an in-flight async read were lost and the latest item never showed up.)
-    _read(source) {
-        this._pendingSource = source;
-        if (this._reading)
-            return Promise.resolve();
-        return this._drain();
+    _queueRead(source) {
+        if (!source || typeof source.get_mimetypes !== 'function')
+            return;
+        const id = GLib.uuid_string_random();
+        const seq = this._nextJobSeq++;
+        const sourceLabel = debugSource(source);
+        const job = {
+            id,
+            seq,
+            source,
+            sourceLabel,
+            sourceKind: sourceKindFromLabel(sourceLabel),
+            mimes: this._readSourceMimes(source),
+        };
+        this._queue.push(job);
+        log.debug(`queue received/enqueued id=${id} seq=${seq} sourceKind=${job.sourceKind} source=${sourceLabel} queued=${this._queue.length} running=${this._processing ? 'yes' : 'no'}`);
+        if (!this._processing)
+            this._drain().catch(e => log.warn(`read failed: ${e.message}`));
     }
 
+    // --- drain side (consumer): reads content, decides, captures ---
+
     async _drain() {
-        this._reading = true;
+        if (this._processing)
+            return;
+        this._processing = true;
+        log.debug('queue drain start');
         try {
-            while (this._pendingSource && !this._stopped) {
-                const source = this._pendingSource;
-                this._pendingSource = null;
-                await this._readOnce(source);
+            while (this._queue.length > 0 && !this._stopped) {
+                const job = this._queue.shift();
+                log.debug(`queue dequeued/handling id=${job.id} seq=${job.seq} sourceKind=${job.sourceKind} source=${job.sourceLabel} remaining=${this._queue.length}`);
+                await this._readOnce(job);
             }
         } finally {
-            this._reading = false;
+            this._processing = false;
+            log.debug(`queue drain stop remaining=${this._queue.length}`);
         }
     }
 
-    async _readOnce(source) {
+    async _readOnce(job) {
         try {
-            let mimes = [];
-            try {
-                mimes = (source.get_mimetypes() ?? []).filter(m => typeof m === 'string');
-            } catch (e) {
-                mimes = [];
+            const mimes = job.mimes;
+            log.debug(`source id=${job.id} seq=${job.seq} mimes=${mimes.join(',') || '(none)'}`);
+            if (this._stopped) {
+                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=stopped remaining=${this._queue.length}`);
+                return;
             }
 
             const has = m => mimes.includes(m);
@@ -228,78 +387,268 @@ export class Monitor {
             // Privacy: skip password-manager / concealed selections.
             const secret = this._secretMimes();
             if (secret.length && mimes.some(m => secret.includes(m))) {
-                log.debug('skipping concealed selection');
+                this._clearLastFile();
+                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=concealed remaining=${this._queue.length}`);
                 return;
             }
 
             const imageMime = supportedImageMime(mimes);
             const hasUnsupportedImage = !imageMime && mimes.some(m => m.startsWith('image/'));
+            const plainMime = textMime(mimes);
 
             if (has('text/uri-list') || has('x-special/gnome-copied-files')) {
                 if (!this._captureFiles()) {
-                    log.debug('skipping file selection; file capture disabled');
+                    this._clearLastFile();
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file reason=disabled remaining=${this._queue.length}`);
                     return;
                 }
-                const bytes = await Clipboard.getContent('text/uri-list', this._maxItemBytes());
+                const mime = has('text/uri-list') ? 'text/uri-list' : 'x-special/gnome-copied-files';
+                const result = await this._readSourceBytes(job.source, mime, this._maxItemBytes());
                 if (this._stopped) return;
-                const text = bytes ? normalizeUriList(new TextDecoder().decode(bytes)) : null;
-                if (text)
-                    this._captureFile(text);
+                if (!result.ok) {
+                    this._clearLastFile();
+                    log.warn(`file clipboard read skipped (${mime}, ${result.reason})`);
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file mime=${mime} reason=${result.reason} remaining=${this._queue.length}`);
+                    return;
+                }
+                log.debug(`source read file id=${job.id} seq=${job.seq} mime=${mime} bytes=${result.bytes.length}`);
+                const rawText = new TextDecoder().decode(result.bytes);
+                const text = mime === 'x-special/gnome-copied-files'
+                    ? normalizeSpecialCopiedFiles(rawText)
+                    : normalizeUriList(rawText);
+                if (text) {
+                    const candidate = { kind: 'file', mime: 'text/uri-list', value: text };
+                    const dropReason = this._dropReason(job, candidate);
+                    if (dropReason) {
+                        this._clearLastFile();
+                        log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=file mime=text/uri-list reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        return;
+                    }
+                    const uriCount = uriListEntries(text).length;
+                    this._captureFile(text, job.id, job.seq);
+                    this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'file', value: text });
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=file mime=text/uri-list bytes=${result.bytes.length} uriCount=${uriCount} remaining=${this._queue.length}`);
+                } else {
+                    this._clearLastFile();
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file mime=${mime} reason=empty remaining=${this._queue.length}`);
+                }
                 return;
             }
 
             // Prefer text when offered; many apps offer both text and image targets.
-            // If this is image-only but not a supported image target, skip it below instead
-            // of probing text APIs unnecessarily.
-            if (has('text/plain;charset=utf-8') || has('text/plain') || has('UTF8_STRING') ||
-                    (!imageMime && !hasUnsupportedImage)) {
-                const text = await Clipboard.getText();
+            if (plainMime) {
+                const result = await this._readSourceBytes(job.source, plainMime, this._maxItemBytes());
                 if (this._stopped) return;
-                if (text && text.length > 0) {
-                    // A file copy fires a follow-up owner-changed exposing only its text/plain
-                    // fallback (the bare path). Keep it as a normal text entry so pasting the
-                    // path into editors still works, but if it matches a just-captured file
-                    // (same path, within the echo window) tag it so that file is bumped back
-                    // above this later-arriving twin.
-                    const twinUriList = this._fileEchoMatch(text);
-                    this._onCapture(twinUriList
-                        ? { kind: 'text', mime: 'text/plain;charset=utf-8', text, promoteFileUriList: twinUriList }
-                        : { kind: 'text', mime: 'text/plain;charset=utf-8', text });
+                if (!result.ok) {
+                    this._clearLastFile();
+                    log.warn(`text clipboard read skipped (${plainMime}, ${result.reason})`);
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=text mime=${plainMime} reason=${result.reason} remaining=${this._queue.length}`);
                     return;
                 }
+                log.debug(`source read text id=${job.id} seq=${job.seq} mime=${plainMime} bytes=${result.bytes.length}`);
+                const text = new TextDecoder().decode(result.bytes);
+                if (text && text.length > 0) {
+                    log.debug(`source text id=${job.id} seq=${job.seq} value="${debugText(text)}"`);
+                    const candidate = { kind: 'text', mime: plainMime, value: text };
+                    const dropReason = this._dropReason(job, candidate);
+                    if (dropReason) {
+                        this._clearLastFile();
+                        log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=text mime=${plainMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        return;
+                    }
+                    // A file copy fires a follow-up owner-changed exposing only its text/plain
+                    // fallback (the bare path). Keep it as a normal text entry so pasting the
+                    // path into editors still works. If it matches a just-captured file (same
+                    // path, within the echo window), extension.js promotes the file back above
+                    // the path and this consumes the pending window so no synthetic path is
+                    // created later.
+                    const twinUriList = this._consumeLastFileMatch(text);
+                    const twinLog = twinUriList
+                        ? `plainFileTwin=yes fileUriCount=${uriListEntries(twinUriList).length} fileUriList="${debugText(twinUriList)}"`
+                        : 'plainFileTwin=no';
+                    log.debug(`capture text id=${job.id} seq=${job.seq} bytes=${result.bytes.length} ${twinLog}`);
+                    this._onCapture(twinUriList
+                        ? { kind: 'text', id: job.id, seq: job.seq, mime: 'text/plain;charset=utf-8', text, fileTwinUriList: twinUriList }
+                        : { kind: 'text', id: job.id, seq: job.seq, mime: 'text/plain;charset=utf-8', text });
+                    this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'text', value: text });
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=text mime=${plainMime} bytes=${result.bytes.length} ${twinLog} remaining=${this._queue.length}`);
+                    return;
+                }
+                this._clearLastFile();
+                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=text mime=${plainMime} reason=empty remaining=${this._queue.length}`);
             }
 
+            this._clearLastFile();
             if (imageMime || hasUnsupportedImage) {
                 if (!this._captureImages()) {
-                    log.debug('skipping image selection; image capture disabled');
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=disabled remaining=${this._queue.length}`);
                     return;
                 }
                 if (this._imageCaptureDisabled) {
-                    log.debug('skipping image selection; image capture disabled after read failures');
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=disabled-after-failures remaining=${this._queue.length}`);
                     return;
                 }
                 if (!imageMime) {
                     log.warn('skipping image selection; no supported image/png target');
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=unsupported-mime remaining=${this._queue.length}`);
                     return;
                 }
                 const maxBytes = this._maxBinaryBytes();
                 if (maxBytes <= 0) {
-                    log.debug('skipping image selection; binary payload cap is zero');
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=binary-cap-zero remaining=${this._queue.length}`);
                     return;
                 }
-                const result = await Clipboard.getContentResult(imageMime, maxBytes);
+                const result = await this._readSourceBytes(job.source, imageMime, maxBytes);
                 if (this._stopped) return;
                 if (!result.ok) {
                     this._noteImageReadFailure(result.reason, imageMime);
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image mime=${imageMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    return;
+                }
+                log.debug(`source read image id=${job.id} seq=${job.seq} mime=${imageMime} bytes=${result.bytes.length}`);
+                const data = GLib.base64_encode(result.bytes);
+                const dropReason = this._dropReason(job, { kind: 'image', mime: imageMime, value: data });
+                if (dropReason) {
+                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=image mime=${imageMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                     return;
                 }
                 this._imageReadFailures = 0;
-                this._onCapture({ kind: 'image', mime: imageMime, bytes: result.bytes });
+                this._onCapture({ kind: 'image', id: job.id, seq: job.seq, mime: imageMime, bytes: result.bytes });
+                this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'image', value: data });
+                log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=image mime=${imageMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                 return;
             }
+            log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=unsupported-mime remaining=${this._queue.length}`);
         } catch (e) {
             log.warn(`read failed: ${e.message}`);
+            log.debug(`queue handled id=${job.id} seq=${job.seq} status=failed reason=exception remaining=${this._queue.length}`);
         }
+    }
+
+    _readSourceStream(source, mime) {
+        if (!source || typeof source.read_async !== 'function' ||
+                typeof source.read_finish !== 'function' || typeof mime !== 'string')
+            return Promise.resolve({ ok: false, stream: null, reason: 'unsupported' });
+        return this._withTimeout(`selection source ${mime} read`,
+            finish => {
+                source.read_async(mime, null, (_source, result) => {
+                    try {
+                        finish({ ok: true, stream: source.read_finish(result), reason: '' });
+                    } catch (e) {
+                        log.warn(`selection source ${mime} read failed: ${e.message}`);
+                        finish({ ok: false, stream: null, reason: 'read-error' });
+                    }
+                });
+            },
+            { ok: false, stream: null, reason: 'timeout' },
+            { ok: false, stream: null, reason: 'read-error' });
+    }
+
+    _withTimeout(label, start, timeoutValue, errorValue) {
+        return new Promise(resolve => {
+            let done = false;
+            let timer = 0;
+            const finish = value => {
+                if (done)
+                    return;
+                done = true;
+                if (timer) {
+                    try {
+                        GLib.Source.remove(timer);
+                    } catch (e) {
+                        // already fired/removed
+                    }
+                    timer = 0;
+                }
+                resolve(value);
+            };
+            timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, READ_TIMEOUT_MS, () => {
+                timer = 0;
+                log.warn(`${label} timed out`);
+                finish(timeoutValue);
+                return GLib.SOURCE_REMOVE;
+            });
+            try {
+                start(finish);
+            } catch (e) {
+                log.warn(`${label} failed: ${e.message}`);
+                finish(errorValue);
+            }
+        });
+    }
+
+    async _readSourceBytes(source, mime, maxBytes) {
+        if (!Number.isFinite(maxBytes) || maxBytes <= 0)
+            return { ok: false, bytes: null, reason: 'oversize' };
+        const opened = await this._readSourceStream(source, mime);
+        if (!opened.ok)
+            return { ok: false, bytes: null, reason: opened.reason };
+        const stream = opened.stream;
+        if (!stream)
+            return { ok: false, bytes: null, reason: 'empty' };
+        const chunks = [];
+        let total = 0;
+        try {
+            while (true) {
+                const chunk = await this._readStreamChunk(stream, mime);
+                if (!chunk.ok)
+                    return { ok: false, bytes: null, reason: chunk.reason };
+                const data = chunk.bytes?.get_data();
+                if (!data || data.length === 0)
+                    break;
+                total += data.length;
+                if (total > maxBytes)
+                    return { ok: false, bytes: null, reason: 'oversize' };
+                chunks.push(Uint8Array.from(data));
+            }
+        } catch (e) {
+            log.warn(`selection source ${mime} stream read failed: ${e.message}`);
+            return { ok: false, bytes: null, reason: 'read-error' };
+        } finally {
+            await this._closeStream(stream);
+        }
+        if (total <= 0)
+            return { ok: false, bytes: null, reason: 'empty' };
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            out.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return { ok: true, bytes: out, reason: '' };
+    }
+
+    _readStreamChunk(stream, mime) {
+        return this._withTimeout(`selection source ${mime} stream read`,
+            finish => {
+                stream.read_bytes_async(READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, null,
+                    (_stream, result) => {
+                        try {
+                            finish({ ok: true, bytes: stream.read_bytes_finish(result), reason: '' });
+                        } catch (e) {
+                            log.warn(`selection source ${mime} stream read failed: ${e.message}`);
+                            finish({ ok: false, bytes: null, reason: 'read-error' });
+                        }
+                    });
+            },
+            { ok: false, bytes: null, reason: 'timeout' },
+            { ok: false, bytes: null, reason: 'read-error' });
+    }
+
+    _closeStream(stream) {
+        return this._withTimeout('selection source stream close',
+            finish => {
+                stream.close_async(GLib.PRIORITY_DEFAULT, null, (_stream, result) => {
+                    try {
+                        stream.close_finish(result);
+                    } catch (e) {
+                        // ignore close failures on a transient clipboard stream
+                    }
+                    finish(null);
+                });
+            },
+            null,
+            null);
     }
 
     _noteImageReadFailure(reason, mime) {
