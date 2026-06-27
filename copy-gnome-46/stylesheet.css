@@ -50,7 +50,7 @@
 }
 
 .cg-row-box {
-    spacing: 8px;
+    spacing: 6px;
 }
 
 .cg-num {
@@ -67,12 +67,18 @@
     font-size: 0.85em;
 }
 
+/* Kinds are short ('text'/'image'/'file') and the time is a fixed 'MM-DD HH:MM'. Size the
+   columns close to their content so they stay aligned without trailing whitespace, leaving
+   the rest of the row to the (x_expand) preview label. Right-align so any residual slack
+   falls toward the preview, not on the far right edge. */
 .cg-kind {
-    min-width: 4.2em;
+    min-width: 3em;
+    text-align: right;
 }
 
 .cg-time {
-    min-width: 6.8em;
+    min-width: 5.4em;
+    text-align: right;
 }
 
 .cg-empty {
