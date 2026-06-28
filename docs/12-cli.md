@@ -197,8 +197,8 @@ Result: ok
 
 Offline checks, always available:
 
-- Detect `gnome-shell --version`; warn if not GNOME 46 for the current build. GNOME 50
-  must be treated as untested until the versioned build is validated.
+- Detect `gnome-shell --version`; warn if it is not one of the tested majors for the
+  checked-out builds (currently GNOME 46 and 50).
 - Detect session type from `$XDG_SESSION_TYPE`; warn that Wayland requires logout/login
   after JS changes and cannot use `Alt+F2`, `r` restart.
 - Verify the extension install directory exists and contains `metadata.json`,
@@ -241,7 +241,7 @@ Rules of thumb:
 - Missing install dir is `fail`.
 - Unsupported GNOME major is `fail` for install/run commands, `warn` for pure log review.
 - `captureImages: true` or `captureFiles: true` is `warn` because non-text capture is
-  opt-in and risky on GNOME 46.
+  opt-in and riskier inside GNOME Shell.
 - Recent `signal 11` in `gnome-shell` is `fail` if logs mention copy-gnome, otherwise
   `warn` with surrounding context.
 

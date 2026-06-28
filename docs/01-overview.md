@@ -30,7 +30,7 @@ implemented as a Shell extension so it works where standalone clipboard managers
 ## Feature set (post-MVP / planned)
 
 - Optional image thumbnails. Current runtime keeps image entries as text previews because
-  decoding thumbnails inside `gnome-shell` is higher risk on Shell 46.
+  decoding thumbnails inside `gnome-shell` is higher risk.
 - Item actions: delete, edit-text, "copy as plain text".
 - Multiple named tabs/stacks (CopyQ-style), low priority.
 - Export / import of history.

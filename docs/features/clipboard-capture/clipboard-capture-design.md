@@ -1,12 +1,13 @@
-# Clipboard capture - restore, enqueue, drain, file twin
+# Clipboard capture - restore, enqueue, drain
 
 > Target design for the capture pipeline (monitor + extension). Producer/consumer split: the
 > `owner-changed` handler (**enqueue side**) is trivial - it only snapshots the
 > synchronously-available fields and pushes a job; the **drain side** does all the work
 > (read content, compare-with-last, drop/capture). Agreed model: single `_lastContent`,
-> **no TTL**, drop decided by content match (memory source + same `type` + same `value`),
-> no enqueue-time marking, no grace window; file-twin with synth-on-expiry; a uuid `id`
-> threaded through the whole lifecycle. Accepted tradeoffs are listed under
+> **no TTL**, drop decided by consecutive content match (same `type` + same `value`),
+> no history lookup, no hash, no enqueue-time marking, no grace window; a uuid `id` is threaded through the whole
+> lifecycle. File-copy capture/restore policy is documented separately in
+> [file-twin-design](file-twin-design.md). Accepted tradeoffs are listed under
 > [Known limitations](#known-limitations).
 
 
@@ -53,15 +54,14 @@ _lastContent = { id, origin, sourceKind, source, type, value }
 | `sourceKind` | memory / non-memory (log only)                           | `'memory'`                       | `job.sourceKind`       |
 | `source`     | source label (log only)                                  | `'(self-restore)'`               | `job.sourceLabel`      |
 
-The drop rule reads only **`type` + `value`** and the current job's `sourceKind`; `origin`
-splits the log reason. `id`/`sourceKind`/`source` are context/logging.
+The drop rule reads only **`type` + `value`**. `origin` and the current job's `sourceKind`
+split the log reason. `id`/`sourceKind`/`source` are context/logging.
 
-**Why `type` + `value`:** a memory event is dropped only when its content matches what we
-last wrote/captured - recognising our restore echo and stale memory replays - while a
-genuinely **new** memory event (a screenshot, or any future memory content) has different
-content and is **captured**. `type` guards against a text and a file/image sharing a string.
-This is **not** dedup: it is scoped to `sourceKind == memory`; manual repeated copies are
-`non-memory` and never suppressed.
+**Why `type` + `value`:** only the immediately previous clipboard payload is compared.
+This catches restore echoes, stale memory replays, and Wayland/clipboard-manager owner
+re-announces without restoring old history-wide dedup. `type` guards against a text and a
+file/image sharing a string. Accepted tradeoff: consecutive identical user copies collapse
+to one visible entry.
 
 
 ## Logging levels
@@ -71,15 +71,14 @@ Per-job pipeline lines carry `id=<uuid> seq=<n>` so one event can be grepped end
 convention across all four flows:
 
 - **debug** - every routine step (the normal path). Enqueue: received, job built, pushed.
-  Drain: dequeued, source read, compare result, **drop reason** (`echo` / `stale-replay`),
-  capture, `setLastContent`. File twin: window armed, twin hit, window expired + synth,
-  window cancelled. Restore: backup/set/touch steps. Also benign skips (concealed selection,
-  empty content).
+  Drain: dequeued, source read, compare result, **drop reason** (`echo` / `stale-replay` / `same-last`),
+  capture, `setLastContent`. File restore: target app class and selected restore mode.
+  Restore: backup/set/touch steps. Also benign skips (concealed selection, empty content).
 - **info** - a notch above routine: user-meaningful milestones at default level, e.g.
   `restored id=...  kind=...  bytes=... `, history loaded (`N entries`).
 - **warn** - recoverable anomalies that skip work but never crash/hang the shell: clipboard
   or source read timeout/failure, oversized item skipped (exceeds payload cap), restore
-  write failed/aborted, file read skipped, twin promote target not found.
+  write failed/aborted, file read skipped, suppressed-repeat top mismatch.
 - **error** - serious but still fail-closed: image capture disabled for the session after
   repeated read failures; config parse failure.
 
@@ -138,12 +137,14 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["1 dequeue next job in FIFO order"] --> B["2 privacy skip; classify mimes, pick mime, read content C and type via read_async"]
-    B --> C{"3 compare last: sourceKind==memory AND type==last.type AND value==last.value"}
+    B --> C{"3 compare last: type==last.type AND value==last.value"}
     C -- "yes and last.origin=restore" --> X1["drop - log echo"]
-    C -- "yes and last.origin=capture" --> X2["drop - log stale-replay"]
+    C -- "yes and sourceKind=memory" --> X2["drop - log stale-replay"]
+    C -- "yes otherwise" --> X3["suppress repeat - log same-last"]
     C -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
     X1 --> H["5 continue until queue empty"]
     X2 --> H
+    X3 --> H
     G --> H
 ```
 
@@ -154,13 +155,17 @@ flowchart TD
    event's source, not the live clipboard). If the chosen text reads back empty, fall through
    to the image branch.
 3. **Compare with `_lastContent`** - the drop test:
-   `job.sourceKind == 'memory'` **and** `type == _last.type` **and** `value == _last.value`.
+   `type == _last.type` **and** `value == _last.value`.
    - true and `_last.origin == 'restore'` → **drop**, log `echo` (our write-back coming back).
-   - true and `_last.origin == 'capture'` → **drop**, log `stale-replay` (a memory replay of
-     content we already hold; scoped to memory, so not dedup).
+   - true and `job.sourceKind == 'memory'` → **drop**, log `stale-replay`.
+   - true otherwise → **suppress repeat**, log `same-last` (consecutive same content /
+     owner re-announce) and notify extension-side bookkeeping.
    - false → **capture**.
 4. **Capture:** `history.add` using `job.id` as the record id, then
    `setLastContent({ type, value, origin:'capture', sourceKind:job.sourceKind, source, id:job.id })`.
+   For suppressed repeats, extension bookkeeping verifies the current top history record has
+   the same kind and payload, then `history.touch(top)` updates `usedAt` and queues the
+   normal async snapshot. If top does not match, it warns and skips the touch.
 5. Loop until the queue is empty. Each compare runs against the state the *previous* processed
    job left, so it is consistent with FIFO order - but note a capture can overwrite a pending
    restore marker (see [Known limitations](#known-limitations)).
@@ -170,44 +175,17 @@ flowchart TD
 
 | current sourceKind | type+value == last | last.origin | result                                             |
 |--------------------|--------------------|-------------|----------------------------------------------------|
-| non-memory         | *                  | *           | capture (real copy; manual repeats not deduped)    |
-| memory             | no                 | *           | **capture** (new memory content - e.g. screenshot) |
-| memory             | yes                | restore     | **drop** (echo)                                    |
+| any                | no                 | *           | capture                                            |
+| any                | yes                | restore     | **drop** (echo)                                    |
 | memory             | yes                | capture     | **drop** (stale replay)                            |
+| non-memory         | yes                | capture     | **drop** (same-last)                               |
 
+## File copies
 
-
-## Flow 4 - File twin (file + its text/plain path)
-
-```mermaid
-flowchart TD
-    A["1 file copy: text/uri-list → capture kind=file → history.add"] --> B["2 arm 3s window: uriList plus path forms"]
-    B --> C{"3 within 3s"}
-    C -- "same-path text/plain" --> D["4 capture kind=text the path → history.add"]
-    D --> E["5 touchByUri uriList → promote file above path → file, path-text"]
-    C -- "3s expires, nothing else" --> F["6 synthesize path-text from uriList → history.add → touchByUri → file, path-text"]
-    C -- "unrelated text arrives" --> G["cancel window; that text captured normally"]
-```
-
-1. A file copy arrives as `text/uri-list` (or `x-special/gnome-copied-files`) → capture a
-   **`kind=file`** record.
-2. Arm a **3 s window** (`_lastFile`) remembering the uri-list and every path form a later
-   `text/plain` echo could use (each `file://` uri, each decoded bare path, the newline-join
-   for multi-file).
-3. Branch on what happens within 3 s.
-4. If a **`text/plain`** event whose text matches one remembered path form arrives → it's the
-   path twin; capture it as a **`kind=text`** record (so the bare path pastes into editors).
-5. `touchByUri(uriList)` promotes the file record back **above** the just-added path →
-   order `[file, path-text]`. History-only; no clipboard write.
-6. If the **3 s expires** with no matching twin (and nothing else replaced the window) →
-   **synthesize** the path-text from the uri-list and add it the same way → `[file, path-text]`.
-   So the path entry exists even when the source app never offered `text/plain`. The synth is a
-   **direct capture emitted outside the drain** (from the window timer) - it does not run the
-   Flow 3 compare-last rule and does not update `_lastContent`.
-   - If **unrelated text** arrives during the window, the window is cancelled and that text
-     is captured normally; no path is synthesized.
-
-> File capture reads/keeps only URI/path references, never file bytes.
+File-copy handling is intentionally simple: capture one `kind=file` record from
+`text/uri-list`; restore later chooses `text/uri-list` or decoded path text by target app.
+Keep that policy out of the generic queue/drop model; see
+[file-twin-design](file-twin-design.md).
 
 
 ## Known limitations
@@ -220,12 +198,14 @@ fail-closed (a wrong call yields at most a duplicate or a missed drop - never a 
   reaching the drain, the marker is overwritten and the echo is captured as a **duplicate** of
   the restored entry. Needs a copy to interleave a restore (narrow window); it is the
   deliberate cost of one slot instead of a separate self-write field.
+- **Consecutive same content collapses.** Copying the exact same payload twice in a row
+  produces one visible entry; the top entry's `usedAt` is refreshed if it still matches the
+  dropped payload. This is intentional for stability on Wayland owner re-announce paths, and
+  is still not old dedup because older matching history records are never searched or
+  promoted.
 - **Replay of older-than-last content.** Only the most-recent content is remembered, so a
-  memory replay of content *older* than the last capture (`copy aaa → copy bbb → memory replay
-  of aaa`) is not recognised and is captured. Rare.
-- **Memory-source assumption.** Drops require the echo to arrive as `sourceKind == memory`,
-  assuming our own write-back always surfaces as a memory source. Re-verify on GNOME 50 -
-  `MetaSelection` ownership behavior is flagged as likely to drift (see `WARNING.md`).
+  replay of content *older* than the last capture (`copy aaa → copy bbb → replay aaa`) is not
+  recognised and is captured. Rare.
 - **Read-before-drop cost.** An echo/replay is fully read (async, bounded by caps + 2 s
   timeout) before being dropped, and `_lastContent.value` holds the last content (for images,
   base64 up to the cap) until the next event - bounded and overwritten, not a leak.

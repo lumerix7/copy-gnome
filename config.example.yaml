@@ -6,7 +6,10 @@
 
 general:
   captureFiles: true             # copied files are stored as URI/path references only
-  captureImages: true            # screenshot/image clipboard capture; risky on GNOME Shell 46
+  captureImages: true            # screenshot/image clipboard capture; risky inside GNOME Shell
+  denyAllMemorySources: true     # skip Shell/Mutter-owned memory sources; useful for testing
+  allowMemoryMimes:              # exact MIME or simple type/* wildcard allowed when denied
+    - image/*
 
 history:
   maxItems: 30                    # visible history count, max 100
@@ -40,6 +43,8 @@ ui:
                                   # manually even if auto-paste picks the wrong combo.
   autoPasteDelayMs: 220           # delay before injecting paste after popup closes
   pasteRestoresFocus: true
+  fileApps:                      # wm_class substrings that receive copied files as
+    - org.gnome.Nautilus         # text/uri-list; all other apps receive path text
   # Terminals paste with Ctrl+Shift+V (matched by wm_class substring):
   terminalApps:
     - gnome-terminal

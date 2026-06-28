@@ -140,7 +140,7 @@ Images and binary:
 - Store inline as base64 in `data` with `encoding:"base64"`.
 - Enforce `storage.binaryMaxBytes` on raw bytes before base64, default 16 KiB.
 - Skip oversized binary/image payloads with a warning.
-- Image/binary capture is risky on GNOME Shell 46; keep strict caps and disable it in
+- Image/binary capture is risky inside GNOME Shell; keep strict caps and disable it in
   config if instability returns.
 
 Base64 tradeoff:

@@ -8,6 +8,8 @@ export const DEFAULTS = {
   general: {
     captureFiles: true,
     captureImages: true,
+    denyAllMemorySources: true,
+    allowMemoryMimes: ["image/*"],
   },
   history: {
     maxItems: 30,
@@ -36,6 +38,7 @@ export const DEFAULTS = {
     autoPaste: true,
     autoPasteDelayMs: 220,
     pasteRestoresFocus: true,
+    fileApps: ["org.gnome.Nautilus"],
     terminalApps: [
       "gnome-terminal", "org.gnome.Terminal", "org.gnome.Console", "kgx",
       "konsole", "xterm", "alacritty", "kitty", "foot", "wezterm",
@@ -74,6 +77,8 @@ export const LIMITS = {
 export const CONFIG_KEYS = [
   "general.captureFiles",
   "general.captureImages",
+  "general.denyAllMemorySources",
+  "general.allowMemoryMimes",
   "history.maxItems",
   "history.maxItemBytes",
   "history.maxAgeDays",
@@ -94,6 +99,7 @@ export const CONFIG_KEYS = [
   "ui.autoPaste",
   "ui.autoPasteDelayMs",
   "ui.pasteRestoresFocus",
+  "ui.fileApps",
   "ui.terminalApps",
   "ui.pasteOverrides",
   "logging.level",
@@ -199,6 +205,8 @@ function sanitizeConfig(config, warnings) {
   }
 
   config.privacy.secretMimes = stringList(config.privacy.secretMimes, []);
+  config.general.allowMemoryMimes = stringList(config.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
+  config.ui.fileApps = stringList(config.ui.fileApps, DEFAULTS.ui.fileApps);
   config.ui.terminalApps = stringList(config.ui.terminalApps, DEFAULTS.ui.terminalApps);
   config.ui.pasteOverrides = pasteOverrides(config.ui.pasteOverrides, warnings);
   return config;
@@ -227,8 +235,12 @@ function getPath(obj, field) {
 }
 
 function stringList(value, fallback) {
-  return Array.isArray(value) && value.every(x => typeof x === "string")
-    ? value.slice()
+  return Array.isArray(value)
+    ? value
+      .filter(x => typeof x === "string")
+      .map(x => x.trim())
+      .filter(x => x.length > 0)
+      .slice(0, 100)
     : fallback.slice();
 }
 

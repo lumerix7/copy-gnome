@@ -35,7 +35,7 @@ representation from that same queued `source`.
 Pick the canonical type to store, while **preserving all offered mimes for faithful
 write-back** when feasible:
 
-1. `text/uri-list` / `x-special/gnome-copied-files` → **file copy** only when `general.captureFiles` is enabled (store URI/path reference, never file bytes; see [04](04-storage.md)).
+1. `text/uri-list` / `x-special/gnome-copied-files` → **file copy** only when `general.captureFiles` is enabled (store one URI-list reference record, never file bytes; see [04](04-storage.md)).
 2. `image/png` (or other `image/*`) → non-file image payload only when `general.captureImages` is enabled.
 3. `text/html` (+ keep a `text/plain` fallback).
 4. `text/plain;charset=utf-8` / `text/plain` → text entry.
@@ -52,23 +52,16 @@ write-back** when feasible:
 → **insert at front** of `history.js` as a new record (every capture is kept)
 → mark store dirty.
 
-Monitor queue processing is read-only: it never writes back to the system clipboard, never
-merges duplicate content, and never computes/stores a content hash. Clipboard writes happen
-only when the user activates an existing history entry.
+Monitor queue processing is read-only: it never writes back to the system clipboard and
+never computes/stores a content hash. It only suppresses consecutive identical clipboard
+payloads via the monitor's single `_lastContent` slot; it does not search or merge older
+history records. Clipboard writes happen only when the user activates an existing history
+entry.
 
-A file copy emits **two** `owner-changed` events: first carrying
-`text/uri-list`/`x-special` (stored as a **file** entry whose `preview` is the full
-`file://...` URI), then a follow-up exposing only `text/plain` - the **bare path**, no
-scheme (stored as a normal **text** entry, so the path can be pasted into editors). Both
-are kept; they are not merged, since the user may want either representation. When the
-second event arrives within a short window (`FILE_ECHO_TTL_MS`, 3 s) and matches the
-just-captured file's path, that remembered file state is consumed once and the file entry is
-promoted back to the front so it stays **above** its later text twin. This recognition +
-reordering is history-only and **never writes the clipboard** (the system already holds the
-real targets). If the path twin does not arrive and no other clipboard event arrives before
-the 3 s window expires, the monitor synthesizes the same path text entry in history and then
-promotes the file entry above it. If any other clipboard event arrives first, the remembered
-file state is cleared and no synthetic path is added.
+File capture creates exactly one **file** entry from `text/uri-list`/`x-special`. It does
+not wait for, synthesize, or promote a separate `text/plain` path entry. The file entry keeps
+the URI-list reference only; when the user restores it, the target app config decides whether
+to write `text/uri-list` or decoded path text.
 
 Non-text clipboard capture is enabled by default in the current test build. On GNOME
 Shell 46 Wayland, screenshot tools can place transient image data on the clipboard, and
@@ -81,8 +74,10 @@ bounded bytes and should be disabled in config if instability returns.
 
 When *we* set the clipboard (write-back), that triggers `owner-changed` again. Guard by
 remembering the exact content we just wrote in the monitor's single `_lastContent` slot
-(`origin=restore`, short TTL). The next queued read whose content matches that slot is
-skipped before it reaches history, so our own writes aren't re-captured as new entries.
+(`origin=restore`, no TTL). Any next queued read whose `type` + `value` matches that slot is
+skipped before it reaches history, so our own writes and Wayland owner re-announces are not
+re-captured as new entries. Consecutive user copies of the exact same payload also collapse
+to one visible entry; older matching history records are never searched or promoted.
 
 
 ## Write-back

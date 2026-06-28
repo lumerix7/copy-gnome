@@ -11,6 +11,8 @@ export const DEFAULTS = {
     general: {
         captureFiles: true,
         captureImages: true,
+        denyAllMemorySources: true,
+        allowMemoryMimes: ['image/*'],
     },
     history: {
         maxItems: 30,
@@ -39,6 +41,9 @@ export const DEFAULTS = {
         autoPaste: true,
         autoPasteDelayMs: 220,
         pasteRestoresFocus: true,
+        // wm_class substrings that should receive copied files as text/uri-list.
+        // All other apps receive the decoded file path as text/plain.
+        fileApps: ['org.gnome.Nautilus'],
         // wm_class substrings whose paste shortcut is Ctrl+Shift+V (terminals).
         terminalApps: [
             'gnome-terminal', 'org.gnome.Terminal', 'org.gnome.Console', 'kgx',
@@ -165,6 +170,8 @@ function sanitizeConfig(cfg) {
         ? cfg.logging.level : 'info';
 
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
+    cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
+    cfg.ui.fileApps = stringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
     cfg.ui.terminalApps = stringList(cfg.ui.terminalApps, DEFAULTS.ui.terminalApps);
     cfg.ui.pasteOverrides = pasteOverrides(cfg.ui.pasteOverrides);
 
@@ -198,6 +205,8 @@ function stringList(value, fallback) {
         return fallback.slice();
     return value
         .filter(v => typeof v === 'string')
+        .map(v => v.trim())
+        .filter(v => v.length > 0)
         .slice(0, 100);
 }
 

@@ -84,13 +84,19 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
     _showError(heading, body) {
         try {
-            // Adw.AlertDialog replaces the deprecated Adw.MessageDialog (libadwaita 1.6+).
-            // It parents via present(widget) instead of set_transient_for(), and auto-closes
-            // on response, so the handler only needs to release our reference.
-            const dlg = new Adw.AlertDialog({ heading, body });
+            if (Adw.AlertDialog) {
+                const dlg = new Adw.AlertDialog({ heading, body });
+                dlg.add_response('ok', 'OK');
+                dlg.connect('response', () => dlg.close());
+                dlg.present(this._window ?? null);
+                return;
+            }
+            const dlg = new Adw.MessageDialog({ heading, body });
             dlg.add_response('ok', 'OK');
-            dlg.connect('response', () => dlg.close());
-            dlg.present(this._window ?? null);
+            dlg.connect('response', () => dlg.destroy());
+            if (this._window)
+                dlg.set_transient_for(this._window);
+            dlg.present();
         } catch (e) {
             log.warn(`prefs: error dialog failed: ${e.message}`);
         }
@@ -290,7 +296,13 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             'Stored as URI/path references only; no file bytes are kept.',
             'general'));
         group.add(this._boolRow('captureImages', 'Capture images / screenshots',
-            'Risky on GNOME Shell 50 - can destabilize the compositor. Turn off if the session gets unstable.',
+            'Risky inside GNOME Shell - can destabilize the compositor. Turn off if the session gets unstable.',
+            'general'));
+        group.add(this._boolRow('denyAllMemorySources', 'Deny memory clipboard sources',
+            'Skip compositor-owned memory sources; useful for avoiding stale replay events while testing.',
+            'general'));
+        group.add(this._listRow('allowMemoryMimes', 'Allowed memory MIME types',
+            'Comma-separated MIME patterns allowed when memory sources are denied, e.g. image/*.',
             'general'));
 
         page.add(group);
@@ -522,6 +534,9 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             title: 'Paste Matching',
             description: 'Terminal apps use Ctrl+Shift+V unless overridden.',
         });
+        paste.add(this._listRow('fileApps', 'File-target apps',
+            'wm_class substrings that receive copied files as text/uri-list; others receive paths.',
+            'ui'));
         paste.add(this._listRow('terminalApps', 'Terminal apps',
             'Comma-separated wm_class substrings.', 'ui'));
         paste.add(this._jsonRow('pasteOverrides', 'Paste overrides',
@@ -559,7 +574,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             page.add(this._warningGroup('Editing config.yaml',
                 'Your changes are written back to this config.yaml, so they take effect - but any hand-written comments or formatting in the YAML are removed on save.'));
 
-        page.add(this._warningGroup('Image capture is risky on Shell 50',
+        page.add(this._warningGroup('Image capture is risky inside GNOME Shell',
             'It can destabilize the compositor. Turn it off on the General page if the session gets unstable. See WARNING.md.'));
     }
 

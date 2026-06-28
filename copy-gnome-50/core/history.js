@@ -13,7 +13,7 @@ import { log } from './log.js';
 // Every capture is kept as its own entry; identical content is intentionally NOT merged,
 // so the history preserves the user's actual copy actions as-is. `id` is the per-record
 // identity (a uuid) used by the UI / store. There is no content hash: the self-write guard
-// and the file-twin promotion match on the raw clipboard content / uri-list directly.
+// matches on the raw clipboard content directly.
 
 function newId() {
     return GLib.uuid_string_random();
@@ -81,25 +81,12 @@ export class History {
         return record;
     }
 
-    /** Promote an existing record to the top (used on restore). */
+    /** Promote/refresh an existing record to the top (used on restore and suppressed repeats). */
     touch(record) {
         record.usedAt = GLib.get_real_time();
         this._sort();
         this._persist();
         this._onChange();
-    }
-
-    /**
-     * Promote the most-recent record whose uri-list equals `uri` to the front, if present.
-     * History-only reordering; never touches the system clipboard. Returns the record or
-     * null. Used for file path twins. `_records` is kept sorted usedAt-desc after every
-     * mutation, so a plain find returns the freshest match (the set is bounded by maxItems).
-     */
-    touchByUri(uri) {
-        const rec = this._records.find(r => r.uri === uri) ?? null;
-        if (rec)
-            this.touch(rec);
-        return rec;
     }
 
     remove(id) {

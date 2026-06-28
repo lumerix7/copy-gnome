@@ -10,7 +10,7 @@
 - **Storage target**: daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot
   lines with bounded inline text, optional capped base64, and file URI references.
 - **Content identity**: none - no content hash is computed or stored; the self-write
-  guard and file-twin promotion compare clipboard content directly. Record `id` is a uuid.
+  guard compares clipboard content directly. Record `id` is a uuid.
 - **UUID**: `copy-gnome@clipboard`.
 - **Multi-version**: one `src/`, built into `copy-gnome-46/` and `copy-gnome-50/`.
 
@@ -25,7 +25,7 @@
 | R4  | Write-back re-captured as a new entry (loop)                         | Monitor `_lastContent(origin=restore)` guard around our own `set_content`                     |
 | R5  | Auto-paste unreliable (focus/timing) on Wayland                      | Enabled by default for testing; restore focus before injecting; document                      |
 | R6  | Secrets captured before app sets concealed hint                      | Honor secret mimes + excludes; optional regex; document at-rest plaintext                     |
-| R7  | `Meta.SelectionSourceMemory` may be stale replay or a valid memory-only copy | Current behavior drops memory when followed by a non-memory source, or when memory content equals `_lastContent(origin=capture)`. This is intentional replay filtering, not general dedup; repeated identical memory-only copies collapse to one visible entry. Restore echoes use `_lastContent(origin=restore)`, with a small concurrency window if another app changes the clipboard during popup restore. |
+| R7  | Wayland owner re-announces can replay the same payload as memory or non-memory | Current behavior compares only against the single `_lastContent` slot and drops consecutive identical `type` + `value` payloads. This is intentional replay filtering, not old history-wide dedup; repeated identical consecutive copies collapse to one visible entry. Restore echoes use `_lastContent(origin=restore)`, with a small concurrency window if another app changes the clipboard during popup restore. |
 | R8  | GNOME 50 API drift breaks build                                      | Compat shim layer; verify against 50 release notes when available                             |
 | R9  | Large image histories bloat disk                                     | Strict inline/base64 caps; oversized image/binary payloads are skipped                        |
 | R10 | Lock-screen enable/disable churn causes leaks                        | Strict timer/signal teardown; flush on every `disable()`                                      |

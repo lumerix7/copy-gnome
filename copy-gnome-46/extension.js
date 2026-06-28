@@ -33,6 +33,34 @@ function uriListCount(uriList) {
     return uriList.split('\n').filter(Boolean).length;
 }
 
+function filePathText(uriList) {
+    const paths = [];
+    for (const line of uriList.split('\n').map(l => l.trim()).filter(Boolean)) {
+        if (!line.startsWith('file://')) {
+            paths.push(line);
+            continue;
+        }
+        try {
+            paths.push(decodeURIComponent(line.replace(/^file:\/\//, '')));
+        } catch (e) {
+            log.debug(`file path decode failed uri="${line.slice(0, 160)}": ${e.message}`);
+        }
+    }
+    return paths.join('\n');
+}
+
+function recordMatchesDrop(rec, drop) {
+    if (!rec || !drop || rec.kind !== drop.kind)
+        return false;
+    if (drop.kind === 'text')
+        return rec.text === drop.value;
+    if (drop.kind === 'file')
+        return rec.uri === drop.value;
+    if (drop.kind === 'image' || drop.kind === 'binary')
+        return rec.data === drop.value;
+    return false;
+}
+
 export default class CopyGnomeExtension extends Extension {
     enable() {
         this._enabled = true;
@@ -82,8 +110,11 @@ export default class CopyGnomeExtension extends Extension {
             return;
         this._monitor = new Monitor({
             onCapture: c => this._onCapture(c),
+            onSuppressedRepeat: r => this._onSuppressedRepeat(r),
             captureFiles: () => this._config.general.captureFiles,
             captureImages: () => this._config.general.captureImages,
+            denyAllMemorySources: () => this._config.general.denyAllMemorySources,
+            allowMemoryMimes: () => this._config.general.allowMemoryMimes,
             maxItemBytes: () => this._config.history.maxItemBytes,
             maxBinaryBytes: () => this._config.storage.binaryMaxBytes,
             secretMimes: () => this._config.privacy.secretMimes,
@@ -251,21 +282,7 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'text', mime: c.mime, encoding: 'utf8', text,
                     bytes: size, preview: textPreview(text),
                 });
-                const twinLog = c.fileTwinUriList
-                    ? ` plainFileTwin=yes synthesized=${c.synthesizedFilePath ? 'yes' : 'no'} fileUriCount=${uriListCount(c.fileTwinUriList)} filePreview="${filePreview(c.fileTwinUriList)}"`
-                    : ' plainFileTwin=no';
-                log.debug(`history add${seqLog} id=${rec.id} kind=text bytes=${size}${twinLog}`);
-                // This text is a file copy's path twin, either from the compositor's later
-                // text/plain echo or synthesized after the echo window. Keep both records,
-                // then put the file back above the path. History-only; no clipboard write.
-                if (c.fileTwinUriList) {
-                    const promoted = this._history.touchByUri(c.fileTwinUriList);
-                    const message = `history promote file${seqLog} id=${promoted?.id ?? '(none)'} afterTextId=${rec.id} synthesized=${c.synthesizedFilePath ? 'yes' : 'no'} uriCount=${uriListCount(c.fileTwinUriList)} preview="${filePreview(c.fileTwinUriList)}"`;
-                    if (promoted)
-                        log.debug(message);
-                    else
-                        log.warn(message);
-                }
+                log.debug(`history add${seqLog} id=${rec.id} kind=text bytes=${size}`);
             } else if (c.kind === 'image') {
                 if (!cfg.general.captureImages) {
                     log.debug(`capture skipped${seqLog} kind=image reason=disabled`);
@@ -296,6 +313,24 @@ export default class CopyGnomeExtension extends Extension {
             }
         } catch (e) {
             log.warn(`capture failed: ${e.message}`);
+        }
+    }
+
+    _onSuppressedRepeat(d) {
+        try {
+            if (!this._enabled || !this._history || d?.reason !== 'same-last')
+                return;
+            const seq = Number.isFinite(d.seq) ? d.seq : 0;
+            const seqLog = seq > 0 ? ` seq=${seq}` : '';
+            const top = this._history.list(1)[0] ?? null;
+            if (!recordMatchesDrop(top, d)) {
+                log.warn(`suppressed repeat skipped history touch${seqLog} repeatId=${d.id ?? '(none)'} kind=${d.kind ?? '(none)'} topId=${top?.id ?? '(none)'} topKind=${top?.kind ?? '(none)'} reason=top-mismatch`);
+                return;
+            }
+            this._history.touch(top);
+            log.debug(`history touch suppressed-repeat${seqLog} repeatId=${d.id} targetId=${top.id} kind=${top.kind} bytes=${top.bytes} reason=same-last`);
+        } catch (e) {
+            log.warn(`suppressed repeat handling failed: ${e.message}`);
         }
     }
 
@@ -331,8 +366,24 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn('file restore skipped; file support is disabled');
                     return;
                 }
-                markSelfWrite('file', rec.uri);
-                wrote = Clipboard.setContent('text/uri-list', encodeUtf8(rec.uri));
+                const wmClass = this._targetWmClass(targetWindow);
+                const restoreFileUri = this._shouldRestoreFileUri(wmClass);
+                const mode = restoreFileUri ? 'file' : 'path';
+                log.debug(`file restore target wmClass="${wmClass}" mode=${mode} fileApps=${(this._config?.ui?.fileApps ?? []).join(',') || '(none)'}`);
+                if (restoreFileUri) {
+                    markSelfWrite('file', rec.uri);
+                    wrote = Clipboard.setContent('text/uri-list', encodeUtf8(rec.uri));
+                    log.debug(`file restore mode=file wmClass="${wmClass}" uriCount=${uriListCount(rec.uri)}`);
+                } else {
+                    const pathText = filePathText(rec.uri);
+                    if (!pathText) {
+                        log.warn('file restore skipped; no path text available');
+                        return;
+                    }
+                    markSelfWrite('text', pathText);
+                    wrote = Clipboard.setText(pathText);
+                    log.debug(`file restore mode=path wmClass="${wmClass}" bytes=${byteLength(pathText)} uriCount=${uriListCount(rec.uri)}`);
+                }
             } else if (rec.text != null) {
                 markSelfWrite('text', rec.text);
                 wrote = Clipboard.setText(rec.text);
@@ -397,6 +448,22 @@ export default class CopyGnomeExtension extends Extension {
         } catch (e) {
             log.debug(`paste focus restore skipped: ${e.message}`);
         }
+    }
+
+    _targetWmClass(targetWindow = null) {
+        try {
+            return targetWindow?.get_wm_class?.() ??
+                global.display.get_focus_window()?.get_wm_class?.() ?? '';
+        } catch (e) {
+            log.debug(`target wm_class read failed: ${e.message}`);
+            return '';
+        }
+    }
+
+    _shouldRestoreFileUri(wmClass) {
+        const hay = String(wmClass ?? '').toLowerCase();
+        return (this._config?.ui?.fileApps ?? [])
+            .some(t => hay.includes(String(t).toLowerCase()));
     }
 
     // Pick the paste keystroke for the currently focused window. There is no semantic

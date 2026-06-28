@@ -71,7 +71,9 @@ on startup so it's never ambiguous).
 # config.yaml
 general:
   captureFiles: true                # copied files are stored as URI/path references only
-  captureImages: true               # screenshot/image capture; risky on GNOME Shell 46
+  captureImages: true               # screenshot/image capture; risky inside GNOME Shell
+  denyAllMemorySources: true       # skip Shell/Mutter memory sources
+  allowMemoryMimes: ["image/*"]     # exact MIME or type/* wildcard allowed when denied
 
 history:
   maxItems: 30                      # visible history count, max 100
@@ -104,6 +106,8 @@ ui:
                                     # regardless; autoPaste only adds the paste keystroke.
   autoPasteDelayMs: 220             # delay before injecting paste after popup closes
   pasteRestoresFocus: true
+  fileApps: ["org.gnome.Nautilus"]  # wm_class substrings that receive file records as
+                                    # text/uri-list; all others receive path text
   terminalApps: [...]               # wm_class substrings that paste with Ctrl+Shift+V
   pasteOverrides: []                # [{match: <wm_class>, combo: ctrl-v|ctrl-shift-v|
                                     #   shift-insert|none}] checked before terminalApps
