@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import { log } from './log.js';
-import { PLAIN_TEXT_MIME, RICH_TEXT_MIMES, richComparableValue } from './payloads.js';
+import { PLAIN_TEXT_MIME, RICH_TEXT_MIMES, richComparablePlain, richComparableValue } from './payloads.js';
 
 // Watches Mutter's selection for clipboard-owner changes (the Wayland-correct way; no
 // polling). Producer/consumer split: _onOwnerChanged (enqueue side) only snapshots the
@@ -38,8 +38,19 @@ function richTextMime(mimes) {
     return RICH_TEXT_MIMES.find(m => mimes.includes(m)) ?? null;
 }
 
-function textMime(mimes) {
-    return TEXT_MIMES.find(m => mimes.includes(m)) ?? null;
+function textMimes(mimes) {
+    if (!Array.isArray(mimes))
+        return [];
+    const out = [];
+    for (const mime of TEXT_MIMES) {
+        if (mimes.includes(mime) && !out.includes(mime))
+            out.push(mime);
+    }
+    for (const mime of mimes) {
+        if (typeof mime === 'string' && mime.startsWith('text/plain') && !out.includes(mime))
+            out.push(mime);
+    }
+    return out;
 }
 
 function debugText(text) {
@@ -288,6 +299,8 @@ export class Monitor {
             return '';
         if (candidate.kind !== last.type || candidate.value !== last.value)
             return '';
+        if (last.origin === 'history')
+            return '';
         if (last.origin === 'restore')
             return 'echo';
         if (job.sourceKind === 'memory')
@@ -306,6 +319,20 @@ export class Monitor {
             return pathText !== '' && text === pathText;
         } catch (e) {
             log.warn(`${jobCtx(job)}: file path twin check skipped reason=${String(e?.message ?? e)}`);
+            return false;
+        }
+    }
+
+    _isRichPlainTwin(job, text) {
+        try {
+            if (job?.sourceKind !== 'memory' || typeof text !== 'string')
+                return false;
+            const last = this._lastContent;
+            if (!comparableContent(last) || last.type !== 'rich')
+                return false;
+            return richComparablePlain(last.value) === text;
+        } catch (e) {
+            log.warn(`${jobCtx(job)}: rich plain twin check skipped reason=${String(e?.message ?? e)}`);
             return false;
         }
     }
@@ -430,7 +457,8 @@ export class Monitor {
 
             const imageMime = supportedImageMime(mimes);
             const hasUnsupportedImage = !imageMime && mimes.some(m => m.startsWith('image/'));
-            const plainMime = textMime(mimes);
+            const plainMimes = textMimes(mimes);
+            const plainMime = plainMimes[0] ?? null;
             const richMime = richTextMime(mimes);
 
             if (has('text/uri-list') || has('x-special/gnome-copied-files')) {
@@ -495,7 +523,7 @@ export class Monitor {
                 const richResult = await this._readSourceBytes(job.source, richMime, maxBytes);
                 if (this._stopped) return;
                 if (richResult.ok) {
-                    const plainResult = await this._readSourceBytes(job.source, plainMime, maxBytes);
+                    const plainResult = await this._readFirstTextSource(job, plainMimes, maxBytes, capName, 'rich plain');
                     if (this._stopped) return;
                     let combinedBytes = richResult.bytes.length + (plainResult.ok ? plainResult.bytes.length : 0);
                     if (plainResult.ok && combinedBytes <= maxBytes) {
@@ -550,7 +578,7 @@ export class Monitor {
                         log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=combined-cap bytes=${combinedBytes} maxBytes=${maxBytes} cap=${capName}`);
                     } else {
                         const details = readLimitDetails(plainResult, capName, maxBytes);
-                        log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=plain-read-${plainResult.reason}${details}`);
+                        log.debug(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=plain-read-${plainResult.reason}${details} attemptedMimes=${plainResult.attemptedMimes?.join(',') || '(none)'}`);
                     }
                 } else {
                     const details = readLimitDetails(richResult, capName, maxBytes);
@@ -564,36 +592,40 @@ export class Monitor {
                 const capName = this._maxTextBytes() <= this._maxItemBytes()
                     ? 'storage.textMaxBytes'
                     : 'history.maxItemBytes';
-                const result = await this._readSourceBytes(job.source, plainMime, maxBytes);
+                const result = await this._readFirstTextSource(job, plainMimes, maxBytes, capName, 'text');
                 if (this._stopped) return;
                 if (!result.ok) {
                     const details = readLimitDetails(result, capName, maxBytes);
-                    log.warn(`${jobCtx(job)}: text clipboard read skipped mime=${plainMime} reason=${result.reason}${details}`);
-                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=${result.reason}${details} remaining=${this._queue.length}`);
+                    log.warn(`${jobCtx(job)}: text clipboard read skipped mimes=${plainMimes.join(',') || '(none)'} reason=${result.reason}${details}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mimes=${plainMimes.join(',') || '(none)'} reason=${result.reason}${details} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`${jobCtx(job)}: source read text mime=${plainMime} bytes=${result.bytes.length}`);
+                log.debug(`${jobCtx(job)}: source read text mime=${result.mime} bytes=${result.bytes.length}`);
                 const text = new TextDecoder().decode(result.bytes);
                 if (text && text.length > 0) {
                     log.debug(`${jobCtx(job)}: source text value="${debugText(text)}"`);
                     if (this._isFilePathTwin(job, text)) {
-                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=file-path-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=file-path-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
-                    const candidate = { kind: 'text', mime: plainMime, value: text };
+                    if (this._isRichPlainTwin(job, text)) {
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=rich-plain-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        return;
+                    }
+                    const candidate = { kind: 'text', mime: result.mime, value: text };
                     const dropReason = this._dropReason(job, candidate);
                     if (dropReason) {
                         this._notifySuppressedRepeat(job, candidate, dropReason);
-                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
                     log.debug(`${jobCtx(job)}: capture text bytes=${result.bytes.length}`);
                     this._onCapture({ kind: 'text', id: job.id, seq: job.seq, mime: 'text/plain;charset=utf-8', text });
                     this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'text', value: text });
-                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=text mime=${plainMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=text mime=${result.mime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=empty remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${result.mime} reason=empty remaining=${this._queue.length}`);
             }
 
             if (imageMime || hasUnsupportedImage) {
@@ -657,7 +689,7 @@ export class Monitor {
                     try {
                         finish({ ok: true, stream: source.read_finish(result), reason: '' });
                     } catch (e) {
-                        log.warn(`selection source ${mime} read failed: ${e.message}`);
+                        log.debug(`selection source ${mime} read failed: ${e.message}`);
                         finish({ ok: false, stream: null, reason: 'read-error' });
                     }
                 });
@@ -693,6 +725,40 @@ export class Monitor {
                 break;
         }
         return out;
+    }
+
+    async _readFirstTextSource(job, mimes, maxBytes, capName, purpose) {
+        if (!Array.isArray(mimes) || mimes.length === 0)
+            return { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes: [] };
+        if (!Number.isFinite(maxBytes) || maxBytes <= 0)
+            return { ok: false, bytes: null, reason: 'oversize', bytesRead: 0, maxBytes, attemptedMimes: [] };
+        if (!job?.source)
+            return { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes: [] };
+        const attemptedMimes = [];
+        let last = { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes };
+        for (const mime of mimes) {
+            if (typeof mime !== 'string' || mime.length === 0)
+                continue;
+            attemptedMimes.push(mime);
+            let result;
+            try {
+                result = await this._readSourceBytes(job.source, mime, maxBytes);
+            } catch (e) {
+                log.debug(`${jobCtx(job)}: ${purpose} clipboard read failed mime=${mime} reason=exception message=${String(e?.message ?? e)}`);
+                result = { ok: false, bytes: null, reason: 'read-error', bytesRead: 0, maxBytes };
+            }
+            if (this._stopped)
+                return { ok: false, bytes: null, reason: 'stopped', bytesRead: 0, maxBytes, attemptedMimes };
+            if (result.ok)
+                return { ...result, mime, attemptedMimes };
+            last = { ...result, mime, attemptedMimes };
+            const fallbackMime = mimes[attemptedMimes.length] ?? '';
+            if (fallbackMime) {
+                const details = readLimitDetails(result, capName, maxBytes);
+                log.debug(`${jobCtx(job)}: ${purpose} clipboard read failed mime=${mime} reason=${result.reason}${details} fallbackMime=${fallbackMime}`);
+            }
+        }
+        return last;
     }
 
     _withTimeout(label, start, timeoutValue, errorValue) {

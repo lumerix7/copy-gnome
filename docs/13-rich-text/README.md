@@ -104,7 +104,6 @@ ui:
     - soffice
   plainTextApps:
     - terminal
-    - org.gnome.console
 ```
 
 Rules:

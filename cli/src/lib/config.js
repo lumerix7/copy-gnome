@@ -42,7 +42,7 @@ export const DEFAULTS = {
     skipClipboardWriteForRecentTopSec: 3,
     fileApps: ["org.gnome.nautilus"],
     richTextApps: ["libreoffice", "soffice"],
-    plainTextApps: ["terminal", "org.gnome.console"],
+    plainTextApps: ["terminal"],
     defaultPasteKeys: ["ctrl", "v"],
     pasteKeybindings: [{ keys: ["ctrl", "shift", "v"], apps: ["terminal"] }],
   },

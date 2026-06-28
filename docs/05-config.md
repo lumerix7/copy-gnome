@@ -113,7 +113,7 @@ ui:
   richTextApps: [libreoffice, soffice]
                                     # lower-case wm_class substrings that receive rich MIME
                                     # for kind=rich records
-  plainTextApps: [terminal, org.gnome.console]
+  plainTextApps: [terminal]
                                     # wins over richTextApps; restores kind=rich as text/plain
   defaultPasteKeys: [ctrl, v]       # fallback paste injection keys; [] skips injection
   pasteKeybindings:                 # checked in order before defaultPasteKeys

@@ -12,10 +12,18 @@
 - **Content identity**: none - no content hash is computed or stored; the self-write
   guard compares clipboard content directly. Record `id` is a uuid.
 - **UUID**: `copy-gnome@clipboard`.
-- **Multi-version**: one `src/`, built into `copy-gnome-46/` and `copy-gnome-50/`.
+- **Multi-version**: two committed, full extension trees (`copy-gnome-46/` and
+  `copy-gnome-50/`) are maintained in parallel. There is no build step; shared code drift
+  is checked by `scripts/check-sync.sh`. See [09](09-multi-version.md).
 - **CLI history commands**: shipped over the DBus control service (`core/ipc.js`, behind
   the swappable `IpcTransport`); `list/get/use/copy/paste/search/rm/clear/popup` are in
   the CLI. See [14-ipc](14-ipc/README.md).
+- **Prefs GUI**: shipped as an Adw/Gtk4 preferences window for keybindings, history,
+  storage, UI, general capture/logging, and about/config path inspection.
+- **Auto-paste default**: on by default (`ui.autoPaste: true`) with a configurable delay
+  and app-specific paste-key overrides.
+- **Context menu**: row item menu is shipped with Paste/Remove, Save as for non-file
+  records, and Show in Files for copied-file records.
 
 
 ## Risks / things to verify
@@ -35,24 +43,35 @@
 | R11 | `<Super>v` keybinding conflict                                       | Configurable; detect failed registration and warn                                             |
 
 
-## To confirm with user
+## Closed user decisions
 
-1. `metadata.json` `uuid` - set to `copy-gnome@clipboard` (no personal handle). OK, or prefer another namespace?
-2. `/opt/copy-gnome` permission model - sticky `1777` (multi-user) vs `0755` owned by the
-   single user? Proposed: `1777`, per-user `0700` subdir.
-3. Auto-paste default - off (proposed) or on?
-4. Commit the generated `copy-gnome-46/` `copy-gnome-50/` dirs, or gitignore and build
-   on install? Proposed: commit, so install works without a build step.
-5. Prefs GUI in MVP or defer (YAML-only first)? Proposed: defer GUI, ship YAML + the
-   keybinding-capture page only.
-6. Prefs GUI details and export/import workflow.
-7. Additional context-menu commands beyond Show/Clear and item Paste/Remove.
+1. Keep `metadata.json` `uuid` as `copy-gnome@clipboard`.
+2. Keep the default data home under `/opt/copy-gnome/$USER`; setup uses a shared
+   `/opt/copy-gnome` parent and a private per-user `0700` subdir.
+3. Keep auto-paste enabled by default for the current test build.
+4. Commit and install from the two versioned extension trees directly.
+5. Ship the prefs GUI now; export/import can remain post-MVP.
+6. Keep the row context-menu surface narrow: Paste, Remove, Save as, and Show in Files.
 
 
-## Suggested milestones
+## Post-MVP candidates
 
-- **M1**: monitor + capture + in-memory history + local store + panel menu (no popup).
-- **M2**: caret/window popup + search + write-back + keybinding.
-- **M3**: images/blobs + thumbnails + caps/eviction + clipboard persistence.
-- **M4**: privacy/excludes + config hot-reload.
-- **M5**: prefs GUI, edit, export/import, GNOME 50 build hardening.
+- Faithful multi-MIME restore for rich text beyond the current primary rich MIME plus
+  plain fallback model.
+- Export/import workflows from the prefs GUI or CLI.
+- True config file monitoring via `Gio.FileMonitor`; the current model reloads config on
+  popup open and on prefs save.
+- Thumbnail UI for image records. Current image rows stay text-oriented and bounded.
+- Revisit a single-source build only if a third GNOME Shell version or much larger
+  version-specific surface makes two-tree sync too costly.
+
+
+## Milestone state
+
+- **M1**: done - monitor, capture, in-memory history, local store, panel menu.
+- **M2**: done - popup, search, restore/write-back, keybinding, keyboard navigation.
+- **M3**: done for bounded image/blob persistence; thumbnails remain post-MVP.
+- **M4**: done for privacy skips and popup-time config reload; file-watch hot-reload is
+  post-MVP.
+- **M5**: done for prefs GUI and GNOME 50 build hardening; export/import remains
+  post-MVP.

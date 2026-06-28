@@ -93,6 +93,13 @@ export function richComparableValue(rich, plain) {
     return `${String(rich ?? '')}${RICH_COMPARABLE_SEPARATOR}${String(plain ?? '')}`;
 }
 
+export function richComparablePlain(value) {
+    if (typeof value !== 'string')
+        return null;
+    const idx = value.lastIndexOf(RICH_COMPARABLE_SEPARATOR);
+    return idx < 0 ? null : value.slice(idx + RICH_COMPARABLE_SEPARATOR.length);
+}
+
 export function recordComparableValue(rec) {
     if (!rec)
         return null;

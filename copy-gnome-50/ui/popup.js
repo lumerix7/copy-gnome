@@ -18,8 +18,8 @@ import { isRichRecord, plainTextPayload, uriListPayload } from '../core/payloads
 
 // Always-visible keyboard/mouse cheat sheet shown under the search box. Short, English +
 // symbols. Number-pick feedback temporarily replaces it and restores it when cleared.
-const HINT_TEXT = '↑↓ move · 1-n pick · enter/click paste · ctrl+f search · esc close';
-const SEARCH_HINT_TEXT = '↑↓ move · enter/click paste · type to filter · esc close';
+const HINT_TEXT = '↑↓/jk move · 1-n pick · enter/click paste · / search · esc close';
+const SEARCH_HINT_TEXT = '↑↓ move · enter/click paste · type to filter · esc cancel';
 const DEFAULT_UI = {
     popupWidth: 640,
     popupMaxHeight: 800,
@@ -54,14 +54,32 @@ function previewLabel(rec) {
 
 function timeLabel(rec) {
     const micros = Number(rec.usedAt || rec.createdAt || 0);
-    if (!micros)
+    if (!Number.isFinite(micros) || micros <= 0)
         return '';
     try {
-        const dt = GLib.DateTime.new_from_unix_local(Math.floor(micros / 1000000));
-        return dt.format('%m-%d %H:%M');
+        const ageUs = Math.max(0, GLib.get_real_time() - micros);
+        const minuteUs = 60 * 1000000;
+        const hourUs = 60 * minuteUs;
+        const dayUs = 24 * hourUs;
+        const minutes = Math.floor(ageUs / minuteUs);
+        if (minutes < 1)
+            return 'now';
+        if (minutes < 60)
+            return `${minutes}m`;
+        const hours = Math.floor(ageUs / hourUs);
+        if (hours < 24)
+            return `${hours}h`;
+        const days = Math.floor(ageUs / dayUs);
+        if (days <= 99)
+            return `${Math.max(1, days)}d`;
+        return '99+d';
     } catch (e) {
         return '';
     }
+}
+
+function timeColumnLabel(rec) {
+    return timeLabel(rec).padStart(4, ' ');
 }
 
 function matches(rec, query) {
@@ -726,7 +744,7 @@ export class Popup {
             box.add_child(label);
             const kind = new St.Label({ text: rec.kind, style_class: kindClass(rec.kind) });
             box.add_child(kind);
-            box.add_child(new St.Label({ text: timeLabel(rec), style_class: 'cg-time' }));
+            box.add_child(new St.Label({ text: timeColumnLabel(rec), style_class: 'cg-time' }));
             button.set_child(box);
 
             // Single click selects then pastes. Hover only tints the row via CSS `:hover`; it
@@ -1124,6 +1142,23 @@ export class Popup {
             (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
     }
 
+    _hasCommandModifier(event) {
+        const state = event.get_state();
+        const masks = [
+            Clutter.ModifierType.CONTROL_MASK,
+            Clutter.ModifierType.MOD1_MASK,
+            Clutter.ModifierType.META_MASK,
+            Clutter.ModifierType.SUPER_MASK,
+            Clutter.ModifierType.HYPER_MASK,
+            Clutter.ModifierType.MOD4_MASK,
+        ].filter(mask => typeof mask === 'number');
+        return masks.some(mask => (state & mask) !== 0);
+    }
+
+    _isSearchFocused() {
+        return global.stage.get_key_focus() === this._entry?.clutter_text;
+    }
+
     _focusSearch() {
         if (!this._entry)
             return;
@@ -1132,10 +1167,23 @@ export class Popup {
         this._showNumberHint('');
     }
 
+    _cancelSearch() {
+        if (!this._entry || !this._isSearchMode())
+            return false;
+        this._clearNumberPick();
+        if (this._entry.get_text() !== '')
+            this._entry.set_text('');
+        if (this._backdrop)
+            global.stage.set_key_focus(this._backdrop);
+        this._showNumberHint('');
+        return true;
+    }
+
     _onKey(event) {
         if (!this._entry)
             return Clutter.EVENT_STOP;
         const sym = event.get_key_symbol();
+        const searchFocused = this._isSearchFocused();
 
         if (this._isCtrlF(event, sym)) {
             this._focusSearch();
@@ -1158,9 +1206,28 @@ export class Popup {
             return Clutter.EVENT_STOP;
         }
 
+        // Plain character shortcuts are active only outside the search box. Once search is
+        // focused, '/', 'j', and 'k' are ordinary query text.
+        if (!searchFocused && !this._hasCommandModifier(event)) {
+            if (sym === Clutter.KEY_slash) {
+                this._focusSearch();
+                return Clutter.EVENT_STOP;
+            }
+            if (sym === Clutter.KEY_j) {
+                this._clearNumberPick();
+                this._select(Math.min(this._selected + 1, this._rows.length - 1));
+                return Clutter.EVENT_STOP;
+            }
+            if (sym === Clutter.KEY_k) {
+                this._clearNumberPick();
+                this._select(Math.max(this._selected - 1, 0));
+                return Clutter.EVENT_STOP;
+            }
+        }
+
         // Number quick-paste (1..N, standalone 0 => row 10) - only while the search box
-        // is not focused. Ctrl+F moves focus into search. See docs/07-ui.md.
-        if (global.stage.get_key_focus() !== this._entry.clutter_text) {
+        // is not focused. '/' or Ctrl+F moves focus into search. See docs/07-ui.md.
+        if (!searchFocused) {
             if (sym === Clutter.KEY_BackSpace) {
                 if (this._onNumberPickBackspace())
                     return Clutter.EVENT_STOP;
@@ -1175,8 +1242,27 @@ export class Popup {
 
         switch (sym) {
             case Clutter.KEY_Escape:
-                this._clearNumberPick();
+                if (this._cancelSearch())
+                    return Clutter.EVENT_STOP;
                 this.hide('escape');
+                return Clutter.EVENT_STOP;
+            case Clutter.KEY_Home:
+            case Clutter.KEY_KP_Home:
+                if (searchFocused)
+                    return Clutter.EVENT_PROPAGATE;
+                this._clearNumberPick();
+                if (this._rows.length === 0)
+                    return Clutter.EVENT_STOP;
+                this._select(0);
+                return Clutter.EVENT_STOP;
+            case Clutter.KEY_End:
+            case Clutter.KEY_KP_End:
+                if (searchFocused)
+                    return Clutter.EVENT_PROPAGATE;
+                this._clearNumberPick();
+                if (this._rows.length === 0)
+                    return Clutter.EVENT_STOP;
+                this._select(this._rows.length - 1);
                 return Clutter.EVENT_STOP;
             case Clutter.KEY_Down:
                 this._clearNumberPick();

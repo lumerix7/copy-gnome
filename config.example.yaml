@@ -52,7 +52,6 @@ ui:
     - soffice
   plainTextApps:                 # wins over richTextApps; restore rich text as text/plain
     - terminal
-    - org.gnome.console
   defaultPasteKeys:              # used when no pasteKeybindings entry matches
     - ctrl
     - v

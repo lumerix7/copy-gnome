@@ -42,7 +42,11 @@
 }
 
 .cg-search {
+    font-family: monospace;
+    font-size: 1em;
     min-width: 260px;
+    min-height: 0;
+    padding: 4px 8px;
     margin-bottom: 4px;
 }
 
@@ -172,7 +176,7 @@
     font-size: 0.85em;
 }
 
-/* Kinds are short ('text'/'image'/'file') and the time is a fixed 'MM-DD HH:MM'. Size the
+/* Kinds are short ('text'/'image'/'file') and the time is a compact relative age. Size the
    columns close to their content so they stay aligned without trailing whitespace, leaving
    the rest of the row to the (x_expand) preview label. Right-align so any residual slack
    falls toward the preview, not on the far right edge. */
@@ -214,7 +218,7 @@
 }
 
 .cg-time {
-    min-width: 5.4em;
+    min-width: 2.6em;
     text-align: right;
 }
 

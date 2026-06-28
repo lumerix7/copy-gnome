@@ -16,8 +16,8 @@ standalone clipboard managers can't monitor the clipboard).
 - Centered, searchable popup (default **Super+V**):
   - first row pre-selected → `Enter` pastes the latest entry,
   - number keys paste rows by number, e.g. **1**, **11**; standalone **0** means row 10,
-  - **Ctrl+F** focuses search; digits typed in search filter the list,
-  - `↑/↓` or mouse hover to select, **single-click** to paste,
+  - `/` focuses search; `Esc` cancels search first, then closes,
+  - `↑/↓` or `j/k` moves selection; **single-click** pastes,
   - right-click a row for the item menu; all rows except copied files offer **Save as**
     (portal save dialog, default name `clip-<kind>-YYYYMMDD_HHMMSS.<ext>`), copied-file
     rows offer **Show in Files** (reveal in the session default file manager; missing

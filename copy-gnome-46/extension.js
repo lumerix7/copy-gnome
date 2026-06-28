@@ -184,6 +184,7 @@ export default class CopyGnomeExtension extends Extension {
             maxBinaryBytes: () => this._config.storage.binaryMaxBytes,
             secretMimes: () => this._config.privacy.secretMimes,
         });
+        this._seedLastContentFromHistory();
         this._monitor.start();
 
         this._popup = new Popup({
@@ -349,6 +350,28 @@ export default class CopyGnomeExtension extends Extension {
 
     _onHistoryChange() {
         this._indicator?.refresh();
+    }
+
+    _seedLastContentFromHistory() {
+        try {
+            if (!this._monitor || !this._history)
+                return;
+            const rec = this._history?.list(1)?.[0] ?? null;
+            const type = recordComparableType(rec);
+            const value = recordComparableValue(rec);
+            if (typeof type !== 'string' || typeof value !== 'string' || value.length === 0)
+                return;
+            this._monitor?.setLastContent({
+                id: rec.id,
+                origin: 'history',
+                sourceKind: 'history',
+                source: '(history-head)',
+                type,
+                value,
+            });
+        } catch (e) {
+            log.warn(`history head seed skipped: ${e.message}`);
+        }
     }
 
     async _flushFromPopup() {

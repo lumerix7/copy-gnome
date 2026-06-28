@@ -148,11 +148,14 @@ flowchart TD
     C -- "yes otherwise" --> X3["suppress repeat - log same-last"]
     C -- "no" --> D{"file path twin? memory text/plain equals decoded _lastContent file URI-list path"}
     D -- "yes" --> X4["drop - log file-path-twin"]
-    D -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
+    D -- "no" --> E{"rich plain twin? memory text/plain equals previous rich plain fallback"}
+    E -- "yes" --> X5["drop - log rich-plain-twin"]
+    E -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
     X1 --> H["5 continue until queue empty"]
     X2 --> H
     X3 --> H
     X4 --> H
+    X5 --> H
     G --> H
 ```
 
@@ -164,22 +167,30 @@ flowchart TD
    to the image branch.
 3. **Compare with `_lastContent`** - the drop test:
    `type == _last.type` **and** `value == _last.value`.
+   `_lastContent` may be seeded from the history head at runtime start so memory twin
+   filters can work across a logout/login boundary. A history seed does **not** suppress
+   ordinary same-content copies; it is only input for the file/rich twin checks below.
    - true and `_last.origin == 'restore'` → **drop**, log `echo` (our write-back coming back).
    - true and `job.sourceKind == 'memory'` → **drop**, log `stale-replay`.
    - true otherwise → **suppress repeat**, log `same-last` (consecutive same content /
      owner re-announce) and notify extension-side bookkeeping.
-   - false → check file path twin, then capture if it is not a twin.
+   - false → check twin filters, then capture if it is not a twin.
 4. **File path twin check:** if `job.sourceKind == 'memory'`, the current payload is
    `text/plain`, `_lastContent.type == 'file'`, and the text exactly equals the decoded path
    text for `_lastContent.value` (the current file URI-list), **drop**, log
    `file-path-twin`. This catches stale memory path twins without blocking unrelated memory
    text copies.
-5. **Capture:** `history.add` using `job.id` as the record id, then
+5. **Rich plain twin check:** if `job.sourceKind == 'memory'`, the current payload is
+   `text/plain`, `_lastContent.type == 'rich'`, and the text exactly equals the plain
+   fallback embedded in `_lastContent.value`, **drop**, log `rich-plain-twin`. This catches
+   stale memory plain fallbacks after a rich capture without treating rich events as file
+   path twins.
+6. **Capture:** `history.add` using `job.id` as the record id, then
    `setLastContent({ type, value, origin:'capture', sourceKind:job.sourceKind, source, id:job.id })`.
    For suppressed repeats, extension bookkeeping verifies the current top history record has
    the same kind and payload, then `history.touch(top)` updates `usedAt` and queues the
    normal async snapshot. If top does not match, it warns and skips the touch.
-6. Loop until the queue is empty. Each compare runs against the state the *previous* processed
+7. Loop until the queue is empty. Each compare runs against the state the *previous* processed
    job left, so it is consistent with FIFO order - but note a capture can overwrite a pending
    restore marker (see [Known limitations](#known-limitations)).
 
@@ -188,11 +199,13 @@ flowchart TD
 
 | current sourceKind | type+value == last | last.origin | result                                                                        |
 |--------------------|--------------------|-------------|-------------------------------------------------------------------------------|
-| any                | no                 | *           | capture if not a file-path-twin                                               |
+| any                | no                 | *           | capture if no twin filter matches                                             |
+| any                | yes                | history     | capture if no twin filter matches                                             |
 | any                | yes                | restore     | **drop** (echo)                                                               |
 | memory             | yes                | capture     | **drop** (stale replay)                                                       |
 | non-memory         | yes                | capture     | **drop** (same-last)                                                          |
 | memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=file` and text equals decoded file path |
+| memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=rich` and text equals rich plain fallback |
 
 ## File copies
 

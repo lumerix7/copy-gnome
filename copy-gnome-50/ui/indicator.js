@@ -5,6 +5,7 @@ import St from 'gi://St';
 
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { log } from '../core/log.js';
 
@@ -32,7 +33,10 @@ class ConfirmMenuItem extends PopupMenu.PopupMenuItem {
 export const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
     _init({ onOpen, onShow, onClear }) {
-        super._init(0.0, 'copy-gnome');
+        // WARNING: keep dontCreateMenu=true. PanelMenu.Button's real menu installs its own
+        // click gesture and treats primary click as menu toggle on GNOME 50. This indicator
+        // needs primary click for history popup and secondary click for the context menu.
+        super._init(0.0, 'copy-gnome', true);
 
         this._onOpen = onOpen;
         this._onShow = onShow ?? onOpen;
@@ -40,6 +44,13 @@ class Indicator extends PanelMenu.Button {
         this._clearArmed = false;
         this._clearConfirmTimer = 0;
         this._clearItem = null;
+        // WARNING: this must stay separate from this.menu. `this.menu` is the dummy menu from
+        // dontCreateMenu=true; using a real PanelMenu.Button menu regresses primary click.
+        this._contextMenuManager = new PopupMenu.PopupMenuManager(this);
+        this._contextMenu = new PopupMenu.PopupMenu(this, 0.0, St.Side.TOP);
+        this._contextMenu.actor.hide();
+        this._contextMenuManager.addMenu(this._contextMenu);
+        Main.uiGroup.add_child(this._contextMenu.actor);
 
         this._icon = new St.Icon({
             icon_name: 'edit-paste-symbolic',
@@ -47,9 +58,9 @@ class Indicator extends PanelMenu.Button {
         });
         this.add_child(this._icon);
 
-        this.menu.addAction('Show', () => this._show());
+        this._contextMenu.addAction('Show', () => this._show());
         this._clearItem = new ConfirmMenuItem('Clear history', event => this._onClearMenu(event));
-        this.menu.addMenuItem(this._clearItem);
+        this._contextMenu.addMenuItem(this._clearItem);
 
         // Keyboard activation (Top Bar navigation → Enter/Space) opens the popup too.
         this.connect('key-press-event', (_actor, event) => {
@@ -61,14 +72,21 @@ class Indicator extends PanelMenu.Button {
             }
             return Clutter.EVENT_PROPAGATE;
         });
-        this.connect('destroy', () => this._disarmClear());
+        this.connect('destroy', () => {
+            this._clearArmed = false;
+            this._cancelClearTimer();
+            this._clearItem = null;
+            this._contextMenu?.destroy?.();
+            this._contextMenu = null;
+            this._contextMenuManager = null;
+        });
     }
 
     _open() {
         const targetWindow =
             global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
         try {
-            this.menu?.close?.();
+            this._contextMenu?.close?.();
             this._onOpen?.(this, targetWindow);
         } catch (e) {
             log.warn(`indicator open failed: ${e.message}`);
@@ -79,7 +97,7 @@ class Indicator extends PanelMenu.Button {
         const targetWindow =
             global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
         try {
-            this.menu?.close?.();
+            this._contextMenu?.close?.();
             this._onShow?.(this, targetWindow);
         } catch (e) {
             log.warn(`indicator show failed: ${e.message}`);
@@ -125,29 +143,33 @@ class Indicator extends PanelMenu.Button {
         } catch (e) {
             log.warn(`indicator clear failed: ${e.message}`);
         }
-        this.menu?.close?.();
+        this._contextMenu?.close?.();
     }
 
     _toggleMenu() {
         try {
             this._disarmClear();
-            this.menu?.toggle?.();
+            this._contextMenu?.toggle?.();
             log.debug('[indicator]: context menu toggled from secondary click');
         } catch (e) {
             log.warn(`indicator context menu failed: ${e.message}`);
         }
     }
 
+    _cancelClearTimer() {
+        if (!this._clearConfirmTimer)
+            return;
+        try {
+            GLib.Source.remove(this._clearConfirmTimer);
+        } catch (e) {
+            log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
+        }
+        this._clearConfirmTimer = 0;
+    }
+
     _disarmClear() {
         this._clearArmed = false;
-        if (this._clearConfirmTimer) {
-            try {
-                GLib.Source.remove(this._clearConfirmTimer);
-            } catch (e) {
-                log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
-            }
-            this._clearConfirmTimer = 0;
-        }
+        this._cancelClearTimer();
         if (this._clearItem)
             this._clearItem.label.text = 'Clear history';
     }

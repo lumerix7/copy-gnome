@@ -49,7 +49,7 @@ export const DEFAULTS = {
         // Rich-text records default to plain restore. Matching richTextApps receive the primary
         // rich MIME; matching plainTextApps always receive text/plain and win over richTextApps.
         richTextApps: ['libreoffice', 'soffice'],
-        plainTextApps: ['terminal', 'org.gnome.console'],
+        plainTextApps: ['terminal'],
         // Default paste keys. Empty list restores clipboard without injecting a keystroke.
         defaultPasteKeys: ['ctrl', 'v'],
         // App-specific paste keys checked before defaultPasteKeys. Each entry:
