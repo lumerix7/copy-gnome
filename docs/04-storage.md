@@ -164,7 +164,7 @@ Hot path:
 Flush policy:
 
 - The latest pending snapshot is appended **once per `storage.flushIntervalSec`** (default
-  60s) by a periodic timer. There is no per-mutation debounce: copies only overwrite the
+  1800s) by a periodic timer. There is no per-mutation debounce: copies only overwrite the
   pending snapshot in memory, so each daily jsonl is written at most once per interval.
 - Periodic flush is append-only. It must not modify existing bytes, rewrite prior lines,
   move files, or compact old data.
@@ -266,7 +266,8 @@ The Shell extension itself should not watch old clips files and live-repair them
 
 - Do not create blobs for v1.
 - Do not persist file bytes, even for small files or image files.
-- Do not write on every key event; append at most once per `storage.flushIntervalSec`.
+- Do not write on every key event; append at most once per `storage.flushIntervalSec`, except
+  for explicit popup-local manual save (`Ctrl+S`).
 - Do not rewrite a fixed current/index file.
 - Do not move/copy old clip files on the normal path.
 - Do not compact, rename, or truncate clips files, or rewrite old clip files, from the Shell

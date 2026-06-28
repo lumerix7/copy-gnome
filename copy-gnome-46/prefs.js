@@ -505,6 +505,8 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         win.add(this._spinRow('popupOpacity', 'Opacity (%)', 10, 100, 1,
             'ui', v => Math.round(v * 100), v => v / 100,
             'Whole popup panel opacity.'));
+        win.add(this._enumRow('popupTheme', 'Theme', 'Popup color theme.', 'ui',
+            ['auto', 'dark', 'light']));
         page.add(win);
 
         const beh = new Adw.PreferencesGroup({ title: 'Behavior' });

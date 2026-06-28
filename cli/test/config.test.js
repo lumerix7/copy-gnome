@@ -144,11 +144,23 @@ test("invalid logging.level enum falls back to info", () => {
   }
 });
 
+test("invalid popupTheme enum falls back to auto", () => {
+  const dir = cfgDir("ui:\n  popupTheme: neon\n");
+  try {
+    const r = loadConfig(dir);
+    assert.equal(r.config.ui.popupTheme, "auto");
+    assert.ok(r.warnings.some(w => /ui\.popupTheme.*ignored.*auto/.test(w)));
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test("valid enum value passes through", () => {
-  const dir = cfgDir("logging:\n  level: debug\n");
+  const dir = cfgDir("logging:\n  level: debug\nui:\n  popupTheme: light\n");
   try {
     const r = loadConfig(dir);
     assert.equal(r.config.logging.level, "debug");
+    assert.equal(r.config.ui.popupTheme, "light");
   } finally {
     cleanup(dir);
   }

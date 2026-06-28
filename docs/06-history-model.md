@@ -47,7 +47,7 @@ single item append.
 | `items`     | sorted record array, newest/MRU first        |
 
 The store appends the newest pending snapshot once per `storage.flushIntervalSec`
-(default 60s); there is no per-mutation write. If a snapshot line would exceed the
+(default 1800s); there is no per-mutation write. If a snapshot line would exceed the
 internal 64 MiB cap, the store keeps the most-recent prefix that fits and syncs the
 running history to that persisted subset.
 

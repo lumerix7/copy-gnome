@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
 import St from 'gi://St';
@@ -22,9 +23,12 @@ const DEFAULT_UI = {
     popupOffsetX: 0,
     popupOffsetY: 0,
     popupEdgeMargin: 8,
-    popupOpacity: 0.82,
+    popupOpacity: 0.92,
+    popupTheme: 'auto',
     numberPickTimeoutMs: 500,
 };
+const POPUP_THEMES = new Set(['auto', 'dark', 'light']);
+let interfaceSettings = null;
 
 // Keyboard hint shown per row, matching the number quick-paste keys (1..N, 0 for the 10th).
 // Hint shows the real row number (1..N). Pressing standalone `0` still selects row 10 - that
@@ -71,6 +75,36 @@ function num(v, fallback, min = -Infinity, max = Infinity) {
 
 function uiDefaults(ui) {
     return { ...DEFAULT_UI, ...(ui ?? {}) };
+}
+
+function interfaceColorScheme() {
+    try {
+        if (!interfaceSettings)
+            interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+        return interfaceSettings.get_string('color-scheme') || 'unknown';
+    } catch (e) {
+        log.debug(`[popup]: gsettings color-scheme unavailable: ${e.message}`);
+        return 'unknown';
+    }
+}
+
+function resolvedThemeForColorScheme(colorScheme) {
+    return colorScheme === 'prefer-light' ? 'light' : 'dark';
+}
+
+function resolvePopupTheme(ui) {
+    const theme = POPUP_THEMES.has(ui?.popupTheme) ? ui.popupTheme : DEFAULT_UI.popupTheme;
+    const gsettingsColorScheme = interfaceColorScheme();
+    const shellColorScheme = Main.sessionMode?.colorScheme ?? 'unknown';
+    const colorScheme = gsettingsColorScheme !== 'unknown' ? gsettingsColorScheme : shellColorScheme;
+    if (theme !== 'auto')
+        return { configured: theme, gsettingsColorScheme, shellColorScheme, resolved: theme };
+    return {
+        configured: theme,
+        gsettingsColorScheme,
+        shellColorScheme,
+        resolved: resolvedThemeForColorScheme(colorScheme),
+    };
 }
 
 function actorContains(container, actor) {
@@ -145,10 +179,11 @@ function ensureActorVisibleInScrollView(scrollView, actor) {
 }
 
 export class Popup {
-    constructor({ getItems, onActivate, onClear, getUi }) {
+    constructor({ getItems, onActivate, onClear, onSave, getUi }) {
         this._getItems = getItems;
         this._onActivate = onActivate;
         this._onClear = onClear ?? (() => {});
+        this._onSave = onSave ?? (() => 'idle');
         this._getUi = getUi ?? (() => null);
 
         this._backdrop = null;
@@ -168,6 +203,7 @@ export class Popup {
         this._clearBtn = null;
         this._clearArmed = false;
         this._clearConfirmTimer = 0;
+        this._saveHintTimer = 0;
     }
 
     get visible() { return this._visible; }
@@ -194,6 +230,8 @@ export class Popup {
         let maxHeight = num(ui.popupMaxHeight, DEFAULT_UI.popupMaxHeight, 120, 1200);
         const edgeMargin = num(ui.popupEdgeMargin, DEFAULT_UI.popupEdgeMargin, 0, 96);
         const opacity = num(ui.popupOpacity, DEFAULT_UI.popupOpacity, 0.1, 1);
+        const theme = resolvePopupTheme(ui);
+        log.debug(`[popup]: theme configured=${theme.configured} gsettingsColorScheme=${theme.gsettingsColorScheme} shellColorScheme=${theme.shellColorScheme} resolved=${theme.resolved}`);
         const numberPickTimeoutMs = num(
             ui.numberPickTimeoutMs, DEFAULT_UI.numberPickTimeoutMs, 100, 5000);
         const offsetX = num(ui.popupOffsetX, DEFAULT_UI.popupOffsetX, -1000, 1000);
@@ -223,7 +261,7 @@ export class Popup {
 
         this._panel = new St.BoxLayout({
             vertical: true,
-            style_class: 'cg-popup',
+            style_class: `cg-popup cg-popup-${theme.resolved}`,
             width,
         });
         this._panel.opacity = Math.round(opacity * 255);
@@ -319,6 +357,7 @@ export class Popup {
     hide() {
         this._clearNumberPick();
         this._disarmClear();
+        this._clearSaveHint();
         if (this._grab) {
             try {
                 Main.popModal(this._grab);
@@ -359,6 +398,7 @@ export class Popup {
         this._grab = null;
         this._clearNumberPick();
         this._disarmClear();
+        this._clearSaveHint();
         if (this._backdrop) {
             try {
                 this._backdrop.destroy();
@@ -549,6 +589,41 @@ export class Popup {
         this._showNumberHint('');
     }
 
+    _clearSaveHint() {
+        if (!this._saveHintTimer)
+            return;
+        try {
+            GLib.Source.remove(this._saveHintTimer);
+        } catch (e) {
+            log.debug(`save hint cleanup failed: ${e.message}`);
+        }
+        this._saveHintTimer = 0;
+    }
+
+    _showSaveHint(text, warning = false) {
+        this._clearSaveHint();
+        this._showNumberHint(text, warning);
+        this._saveHintTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+            this._saveHintTimer = 0;
+            this._showNumberHint('');
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _saveHintForStatus(status) {
+        switch (status) {
+            case 'saved':
+                return { text: 'History saved', warning: false };
+            case 'busy':
+                return { text: 'Save already in progress', warning: true };
+            case 'failed':
+                return { text: 'History save failed', warning: true };
+            case 'idle':
+            default:
+                return { text: 'History already saved', warning: false };
+        }
+    }
+
     _commitNumberPick() {
         const n = parseInt(this._numberPickBuffer, 10);
         this._clearNumberPick();
@@ -650,6 +725,12 @@ export class Popup {
             (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
     }
 
+    _isCtrlS(event, sym) {
+        const state = event.get_state();
+        return sym === Clutter.KEY_s &&
+            (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
+    }
+
     _focusSearch() {
         if (!this._entry)
             return;
@@ -664,6 +745,22 @@ export class Popup {
 
         if (this._isCtrlF(event, sym)) {
             this._focusSearch();
+            return Clutter.EVENT_STOP;
+        }
+        if (this._isCtrlS(event, sym)) {
+            this._clearNumberPick();
+            Promise.resolve(this._onSave())
+                .then(status => {
+                    if (this._visible) {
+                        const hint = this._saveHintForStatus(status);
+                        this._showSaveHint(hint.text, hint.warning);
+                    }
+                })
+                .catch(e => {
+                    log.warn(`popup save failed: ${e.message}`);
+                    if (this._visible)
+                        this._showSaveHint('History save failed', true);
+                });
             return Clutter.EVENT_STOP;
         }
 

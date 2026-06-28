@@ -77,6 +77,13 @@ test("setConfigValue rejects a bad enum value", () => {
   assert.match(r.error, /expects one of: error, warn, info, debug/);
 });
 
+test("setConfigValue accepts popupTheme enum values", () => {
+  const set = setConfigValue("ui.popupTheme", "dark");
+  assert.equal(set.ok, true);
+  assert.equal(set.value, "dark");
+  assert.equal(getConfigValue("ui.popupTheme").value, "dark");
+});
+
 test("setConfigValue accepts and writes a valid number", () => {
   const set = setConfigValue("ui.popupOffsetX", "12");
   assert.equal(set.ok, true);

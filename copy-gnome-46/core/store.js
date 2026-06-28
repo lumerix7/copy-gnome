@@ -287,7 +287,7 @@ export class Store {
         // supersedes any unsaved snapshot, so we never queue stale or duplicate work. `gen` is
         // History's change counter at snapshot time, used to detect concurrent edits in flush().
         // No per-mutation flush: writes happen only on the periodic timer in extension.js
-        // (storage.flushIntervalSec, default 60s) and on disable()/closeSync(). _pending just
+        // (storage.flushIntervalSec, default 1800s) and on disable()/closeSync(). _pending just
         // holds the latest full snapshot until then; recent captures may be lost on crash.
         this._pending = { target: currentClipName(), records, gen };
     }
@@ -367,9 +367,9 @@ export class Store {
     // progress, a concurrent call leaves _pending in place for the next periodic tick.
     async flush() {
         if (this._closed || !this._pending)
-            return;
+            return 'idle';
         if (this._busy)
-            return;
+            return 'busy';
         this._busy = true;
         const batch = this._pending;
         this._pending = null;
@@ -380,13 +380,14 @@ export class Store {
             // against that via batch.gen.
             const { records, line, trimmed } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
-                return;
+                return 'failed';
             const path = clipPath(this._dir, batch.target);
             log.debug(`[store]: flush ${records.length} records -> ${path}${trimmed ? ' (trimmed)' : ''}`);
             await this._appendTextAsync(path, line + '\n');
             if (trimmed)
                 this._onTrim(records, batch.gen);
             this._degraded = false;
+            return 'saved';
         } catch (e) {
             if (!this._degraded) {
                 this._degraded = true;
@@ -394,6 +395,7 @@ export class Store {
             } else {
                 log.warn(`[store]: persistence append failed; dropping pending history snapshot: ${e.message}`);
             }
+            return 'failed';
         } finally {
             this._busy = false;
         }

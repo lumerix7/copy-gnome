@@ -173,6 +173,7 @@ export default class CopyGnomeExtension extends Extension {
             getItems: () => this._history.list(),
             onActivate: (rec, targetWindow) => this._restore(rec, targetWindow),
             onClear: () => this._history.clear(),
+            onSave: () => this._flushFromPopup(),
             getUi: () => this._uiConfig(),
         });
 
@@ -186,7 +187,7 @@ export default class CopyGnomeExtension extends Extension {
 
         this._addKeybinding('toggle-popup', () => this._popup.toggle());
 
-        // Periodic guaranteed flush (the "~1 minute persistence").
+        // Periodic guaranteed flush; Ctrl+S in the popup can also flush on demand.
         const sec = Math.max(5, this._config.storage.flushIntervalSec);
         this._flushTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sec, () => {
             this._store.flush().catch(e => log.warn(`periodic flush: ${e.message}`));
@@ -312,6 +313,17 @@ export default class CopyGnomeExtension extends Extension {
 
     _onHistoryChange() {
         this._indicator?.refresh();
+    }
+
+    async _flushFromPopup() {
+        try {
+            const status = await this._store?.flush() ?? 'idle';
+            log.debug(`[store]: history save ${status}`);
+            return status;
+        } catch (e) {
+            log.warn(`popup save: ${e.message}`);
+            return 'failed';
+        }
     }
 
     _uiConfig() {

@@ -21,7 +21,7 @@ export const DEFAULTS = {
     backend: "jsonl",
     textMaxBytes: 1024 * 1024,
     binaryMaxBytes: 1024 * 1024,
-    flushIntervalSec: 300,
+    flushIntervalSec: 1800,
   },
   privacy: {
     secretMimes: [],
@@ -32,7 +32,8 @@ export const DEFAULTS = {
     popupOffsetX: 0,
     popupOffsetY: 0,
     popupEdgeMargin: 8,
-    popupOpacity: 0.82,
+    popupOpacity: 0.92,
+    popupTheme: "auto",
     numberPickTimeoutMs: 500,
     showThumbnails: false,
     autoPaste: true,
@@ -50,6 +51,7 @@ export const DEFAULTS = {
 
 export const ENUMS = {
   "storage.backend": ["jsonl", "gda"],
+  "ui.popupTheme": ["auto", "dark", "light"],
   "logging.level": ["error", "warn", "info", "debug"],
 };
 
@@ -92,6 +94,7 @@ export const CONFIG_KEYS = [
   "ui.popupOffsetY",
   "ui.popupEdgeMargin",
   "ui.popupOpacity",
+  "ui.popupTheme",
   "ui.numberPickTimeoutMs",
   "ui.showThumbnails",
   "ui.autoPaste",
@@ -194,13 +197,13 @@ function sanitizeConfig(config, warnings) {
   for (const [field, [min, max]] of Object.entries(LIMITS))
     clampNumber(config, field, min, max, warnings);
 
-  if (!ENUMS["storage.backend"].includes(config.storage.backend)) {
-    warnings.push(`storage.backend ${JSON.stringify(config.storage.backend)} ignored; using jsonl`);
-    config.storage.backend = "jsonl";
-  }
-  if (!ENUMS["logging.level"].includes(config.logging.level)) {
-    warnings.push(`logging.level ${JSON.stringify(config.logging.level)} ignored; using info`);
-    config.logging.level = "info";
+  for (const [field, allowed] of Object.entries(ENUMS)) {
+    const value = getPath(config, field);
+    if (allowed.includes(value))
+      continue;
+    const fallback = getPath(DEFAULTS, field);
+    warnings.push(`${field} ${JSON.stringify(value)} ignored; using ${fallback}`);
+    setPath(config, field, fallback);
   }
 
   config.privacy.secretMimes = stringList(config.privacy.secretMimes, []);
@@ -231,6 +234,15 @@ function clampNumber(config, field, min, max, warnings) {
 
 function getPath(obj, field) {
   return field.split(".").reduce((cur, part) => cur[part], obj);
+}
+
+function setPath(obj, field, value) {
+  const parts = field.split(".");
+  const key = parts.pop();
+  let cur = obj;
+  for (const part of parts)
+    cur = cur[part];
+  cur[key] = value;
 }
 
 function stringList(value, fallback) {

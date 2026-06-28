@@ -24,7 +24,7 @@ export const DEFAULTS = {
         backend: 'jsonl',
         textMaxBytes: 1024 * 1024,  // 1 MiB
         binaryMaxBytes: 1024 * 1024, // 1 MiB
-        flushIntervalSec: 300,       // append latest snapshot once per N sec (the only disk writer)
+        flushIntervalSec: 1800,      // append latest snapshot once per N sec (the only disk writer)
     },
     privacy: {
         secretMimes: [],
@@ -35,7 +35,8 @@ export const DEFAULTS = {
         popupOffsetX: 0,
         popupOffsetY: 0,
         popupEdgeMargin: 8,
-        popupOpacity: 0.82,
+        popupOpacity: 0.92,
+        popupTheme: 'auto',
         numberPickTimeoutMs: 500,
         showThumbnails: false,
         autoPaste: true,
@@ -166,6 +167,8 @@ function sanitizeConfig(cfg) {
     cfg.storage.backend = cfg.storage.backend === 'gda' ? 'gda' : 'jsonl';
     cfg.logging.level = ['error', 'warn', 'info', 'debug'].includes(cfg.logging.level)
         ? cfg.logging.level : 'info';
+    cfg.ui.popupTheme = ['auto', 'dark', 'light'].includes(cfg.ui.popupTheme)
+        ? cfg.ui.popupTheme : DEFAULTS.ui.popupTheme;
 
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
     cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);

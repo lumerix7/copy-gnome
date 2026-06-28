@@ -1,22 +1,53 @@
-/* copy-gnome popup styling. Inherits Shell light/dark theming via base colors. */
+/* copy-gnome popup styling. Popup colors are explicit for GNOME Shell consistency. */
 
 .cg-backdrop {
     background-color: transparent;
 }
 
 .cg-popup {
-    font-family: "Noto Sans Mono CJK SC", "Liberation Mono", "DejaVu Sans Mono", monospace;
-    background-color: rgba(30, 30, 30, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-family: monospace;
     border-radius: 12px;
     padding: 8px;
     spacing: 6px;
-    box-shadow: 0 4px 18px 2px rgba(0, 0, 0, 0.5);
+}
+
+.cg-popup-dark {
+    background-color: rgba(54, 54, 58, 0.96);
+    color: #f2f2f0;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 4px 18px 2px rgba(0, 0, 0, 0.38);
+}
+
+.cg-popup-light {
+    background-color: rgba(238, 238, 235, 0.96);
+    color: #242426;
+    border: 1px solid rgba(0, 0, 0, 0.16);
+    box-shadow: 0 4px 18px 2px rgba(0, 0, 0, 0.22);
 }
 
 .cg-search {
     min-width: 260px;
     margin-bottom: 4px;
+}
+
+.cg-popup-dark .cg-search {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #f2f2f0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.cg-popup-dark .cg-search StLabel.hint-text {
+    color: rgba(255, 255, 255, 0.58);
+}
+
+.cg-popup-light .cg-search {
+    background-color: rgba(246, 246, 242, 0.98);
+    color: #18181a;
+    border: 1px solid rgba(0, 0, 0, 0.26);
+}
+
+.cg-popup-light .cg-search StLabel.hint-text {
+    color: rgba(0, 0, 0, 0.68);
 }
 
 .cg-number-hint {
@@ -26,7 +57,7 @@
 }
 
 .cg-number-hint-warning {
-    color: #ffb4a8;
+    color: #e7aaa0;
     opacity: 0.95;
 }
 
@@ -43,11 +74,19 @@
    hovering no longer moves the selection. The .cg-selected rule below is declared last so
    it wins (equal specificity) when a row is both hovered and selected. */
 .cg-row:hover {
-    background-color: rgba(120, 170, 255, 0.12);
+    background-color: rgba(255, 255, 255, 0.10);
 }
 
 .cg-row.cg-selected {
-    background-color: rgba(120, 170, 255, 0.28);
+    background-color: rgba(255, 255, 255, 0.20);
+}
+
+.cg-popup-light .cg-row:hover {
+    background-color: rgba(0, 0, 0, 0.07);
+}
+
+.cg-popup-light .cg-row.cg-selected {
+    background-color: rgba(0, 0, 0, 0.13);
 }
 
 .cg-row-box {
@@ -107,12 +146,18 @@
 
 .cg-clear:hover {
     opacity: 1;
-    background-color: rgba(255, 120, 120, 0.25);
+    background-color: rgba(225, 120, 110, 0.18);
 }
 
 .cg-clear-armed,
 .cg-clear-armed:hover {
     opacity: 1;
-    color: #ffb4a8;
-    background-color: rgba(255, 90, 90, 0.35);
+    color: #e7aaa0;
+    background-color: rgba(225, 120, 110, 0.28);
+}
+
+.cg-popup-light .cg-number-hint-warning,
+.cg-popup-light .cg-clear-armed,
+.cg-popup-light .cg-clear-armed:hover {
+    color: #9a4039;
 }

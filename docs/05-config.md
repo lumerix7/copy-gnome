@@ -85,7 +85,7 @@ storage:
   backend: jsonl                    # jsonl | gda
   textMaxBytes: 1048576             # 1 MiB default; max 15 MiB, also bounded by maxItemBytes
   binaryMaxBytes: 1048576           # 1 MiB default; max 10 MiB raw, also bounded by maxItemBytes
-  flushIntervalSec: 300             # append latest snapshot once per N seconds (the only writer)
+  flushIntervalSec: 1800            # append latest snapshot once per N seconds (the only writer)
 
 privacy:
   # Optional skip list. Leave empty if password/token copies should remain in history.
@@ -98,7 +98,8 @@ ui:
   popupOffsetX: 0                   # final px adjustment from centered position
   popupOffsetY: 0
   popupEdgeMargin: 8                # min distance from monitor edge
-  popupOpacity: 0.82                # whole panel opacity, 0.1..1
+  popupOpacity: 0.92                # whole panel opacity, 0.1..1
+  popupTheme: auto                  # auto|dark|light
   numberPickTimeoutMs: 500          # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false             # reserved; current popup uses text-only image previews
   autoPaste: true                   # ALSO inject the paste keystroke after restore.

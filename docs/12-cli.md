@@ -148,6 +148,9 @@ Useful config examples:
 ```bash
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 0  # disable row-1 write skip
+copy-gnome config set ui.popupTheme auto                      # auto | dark | light
+copy-gnome config set ui.popupOpacity 0.92                    # less transparent popup
+copy-gnome config set storage.flushIntervalSec 1800           # 30m periodic history flush
 copy-gnome config set storage.textMaxBytes 1048576            # 1 MiB text cap
 copy-gnome config set storage.binaryMaxBytes 1048576          # 1 MiB raw image/binary cap
 ```
