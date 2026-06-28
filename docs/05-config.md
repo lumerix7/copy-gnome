@@ -76,7 +76,7 @@ general:
   allowMemoryMimes: ["image/*"]     # only used when denyAllMemorySources=true
 
 history:
-  maxItems: 30                      # visible history count, max 100
+  maxItems: 100                     # visible history count, max 500
   maxItemBytes: 4194304             # 4 MiB default; max 16 MiB
   maxAgeDays: 3                     # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
   cleanupIntervalSec: 86400         # seconds; periodic expired-file sweep interval, 15..864000
@@ -110,10 +110,10 @@ ui:
                                     # seconds, restore/paste it without rewriting clipboard.
   fileApps: ["org.gnome.nautilus"]  # lower-case wm_class substrings that receive file
                                     # records as text/uri-list; all others receive path text
-  terminalApps: ["terminal"]        # lower-case wm_class substrings that paste with
-                                    # Ctrl+Shift+V
-  pasteOverrides: []                # [{match: <wm_class>, combo: ctrl-v|ctrl-shift-v|
-                                    #   shift-insert|none}] checked before terminalApps
+  defaultPasteKeys: [ctrl, v]       # fallback paste injection keys; [] skips injection
+  pasteKeybindings:                 # checked in order before defaultPasteKeys
+    - keys: [ctrl, shift, v]        # case-insensitive; order/repeats preserved
+      apps: [terminal]              # lower-case wm_class substrings
 
 keybindings:                        # mirror only; authoritative copy is GSettings
   togglePopup: "<Super>v"

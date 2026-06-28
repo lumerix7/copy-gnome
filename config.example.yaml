@@ -12,7 +12,7 @@ general:
     - image/*
 
 history:
-  maxItems: 30                    # visible history count, max 100
+  maxItems: 100                   # visible history count, max 500
   maxItemBytes: 4194304           # 4 MiB default; max 16 MiB
   maxAgeDays: 3                   # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
   cleanupIntervalSec: 86400       # periodic expired-file sweep interval (seconds), 15..864000
@@ -47,14 +47,12 @@ ui:
                                   # seconds, restore/paste it without rewriting clipboard.
   fileApps:                      # lower-case wm_class substrings that receive copied
     - org.gnome.nautilus         # files as text/uri-list; others receive path text
-  # Terminals paste with Ctrl+Shift+V (matched by wm_class substring):
-  terminalApps:
-    - terminal
-  # Per-app overrides, checked before terminalApps. combo: ctrl-v | ctrl-shift-v |
-  # shift-insert | none  (none = restore clipboard only, no keystroke).
-  pasteOverrides: []
-  #   - match: Emacs
-  #     combo: none
+  defaultPasteKeys:              # used when no pasteKeybindings entry matches
+    - ctrl
+    - v
+  pasteKeybindings:              # matched by lower-case wm_class substring
+    - keys: [ctrl, shift, v]     # case-insensitive; order/repeats preserved
+      apps: [terminal]
 
 logging:
   level: info                     # error | warn | info | debug

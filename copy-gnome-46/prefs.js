@@ -352,10 +352,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         const group = new Adw.PreferencesGroup({
             title: 'Limits',
-            description: 'Default 30 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
+            description: 'Default 100 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
         });
 
-        group.add(this._spinRow('maxItems', 'Max history items', 1, 100, 1,
+        group.add(this._spinRow('maxItems', 'Max history items', 1, 500, 1,
             'history', v => v, v => Math.round(v),
             'Maximum entries kept in memory and shown in the popup.'));
         group.add(this._spinRow('maxItemBytes', 'Max item size (KiB)', 1, 16384, 1,
@@ -511,7 +511,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
         const beh = new Adw.PreferencesGroup({ title: 'Behavior' });
         const autoPasteRow = this._boolRow('autoPaste', 'Auto-paste after restore',
-            'After restore, also inject the paste key (Ctrl+V, or the app-specific combo). Off = restore the clipboard only.', 'ui');
+            'After restore, also inject the configured paste keys. Off = restore the clipboard only.', 'ui');
         const delayRow = this._spinRow('autoPasteDelayMs', 'Auto-paste delay (ms)', 0, 5000, 1,
             'ui', v => v, v => Math.round(v),
             'Delay before injecting the paste key after restoring the clipboard.');
@@ -538,15 +538,17 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
         const paste = new Adw.PreferencesGroup({
             title: 'Paste Matching',
-            description: 'Terminal apps use Ctrl+Shift+V unless overridden.',
+            description: 'Paste keys are matched by focused window wm_class.',
         });
         paste.add(this._listRow('fileApps', 'File-target apps',
             'wm_class substrings that receive copied files as text/uri-list; others receive paths.',
             'ui'));
-        paste.add(this._listRow('terminalApps', 'Terminal apps',
-            'Comma-separated wm_class substrings.', 'ui'));
-        paste.add(this._jsonRow('pasteOverrides', 'Paste overrides',
-            'JSON array: [{"match":"Emacs","combo":"none"}]', 'ui'));
+        paste.add(this._listRow('defaultPasteKeys', 'Default paste keys',
+            'Comma-separated key tokens, such as ctrl, v. Empty restores clipboard only.',
+            'ui'));
+        paste.add(this._jsonRow('pasteKeybindings', 'Paste keybindings',
+            'JSON array: [{"keys":["ctrl","shift","v"],"apps":["terminal"]}]',
+            'ui'));
         page.add(paste);
 
         return page;

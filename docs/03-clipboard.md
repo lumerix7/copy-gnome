@@ -143,12 +143,16 @@ default 220 ms).
 clipboard via *its own* shortcut, so auto-paste must inject the app-appropriate keystroke:
 
 - Default **Ctrl+V**.
-- **Terminals** paste with **Ctrl+Shift+V** - if the focused window has a
-  `wm_class`, it is lower-cased and matched by substring against lower-cased
-  `ui.terminalApps` entries. The default is `["terminal"]`.
-- `ui.pasteOverrides` (checked first) maps a `wm_class` substring to a combo
-  (`ctrl-v` | `ctrl-shift-v` | `shift-insert` | `none`) for apps with non-standard
-  shortcuts; `none` skips injection.
+- `ui.defaultPasteKeys` is the fallback key list, default `[ctrl, v]`.
+- `ui.pasteKeybindings` is checked first, in order. Each entry is
+  `{ keys: [...], apps: [...] }`; `apps` are lower-cased `wm_class` substrings, and
+  `keys` are case-insensitive key tokens such as `ctrl`, `shift`, `alt`, `super`,
+  `insert`, `enter`, `tab`, `space`, `f1`, or single letters/digits. The default terminal
+  rule is `{ keys: [ctrl, shift, v], apps: [terminal] }`.
+- `keys` is a low-level key list: order and duplicates are preserved, and unusual lists
+  such as `[p]` or `[ctrl, a, e]` are accepted. Invalid key tokens are warned and dropped; if a
+  non-empty app rule has no valid keys left, that rule is ignored. `keys: []` restores the
+  clipboard without injecting a paste keystroke.
 
 Restore normally writes the clipboard before auto-paste. The only configured exception is
 the recent row-1 shortcut above, which skips only that system clipboard write. Auto-paste

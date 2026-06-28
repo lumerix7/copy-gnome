@@ -15,7 +15,7 @@ export const DEFAULTS = {
         allowMemoryMimes: ['image/*'],
     },
     history: {
-        maxItems: 30,
+        maxItems: 100,
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 3,              // 0 = keep all daily files; N deletes clips-*.jsonl older than N days
         cleanupIntervalSec: 86400,  // periodic expired-file sweep interval (seconds), 15..864000
@@ -46,12 +46,11 @@ export const DEFAULTS = {
         // wm_class substrings that should receive copied files as text/uri-list.
         // All other apps receive the decoded file path as text/plain.
         fileApps: ['org.gnome.nautilus'],
-        // wm_class substrings whose paste shortcut is Ctrl+Shift+V (terminals).
-        terminalApps: ['terminal'],
-        // Per-app paste combo overrides (checked before terminalApps). Each entry:
-        //   { match: '<wm_class substring>', combo: 'ctrl-v'|'ctrl-shift-v'|'shift-insert'|'none' }
-        // Use 'none' to restore the clipboard without injecting a keystroke for an app.
-        pasteOverrides: [],
+        // Default paste keys. Empty list restores clipboard without injecting a keystroke.
+        defaultPasteKeys: ['ctrl', 'v'],
+        // App-specific paste keys checked before defaultPasteKeys. Each entry:
+        //   { keys: ['ctrl', 'shift', 'v'], apps: ['<wm_class substring>'] }
+        pasteKeybindings: [{ keys: ['ctrl', 'shift', 'v'], apps: ['terminal'] }],
     },
     logging: {
         level: 'info',
@@ -59,7 +58,7 @@ export const DEFAULTS = {
 };
 
 const LIMITS = {
-    'history.maxItems': [1, 100],
+    'history.maxItems': [1, 500],
     'history.maxItemBytes': [1024, 16 * 1024 * 1024],
     'history.maxAgeDays': [0, 3650],
     'history.cleanupIntervalSec': [15, 864000],
@@ -77,7 +76,25 @@ const LIMITS = {
     'ui.skipClipboardWriteForRecentTopSec': [0, 900],
 };
 
-const PASTE_COMBOS = new Set(['ctrl-v', 'ctrl-shift-v', 'shift-insert', 'none']);
+const MODIFIER_KEYS = new Set(['ctrl', 'shift', 'alt', 'super']);
+const NAMED_KEYS = new Set([
+    ...MODIFIER_KEYS,
+    'backspace',
+    'delete',
+    'down',
+    'end',
+    'enter',
+    'escape',
+    'home',
+    'insert',
+    'left',
+    'page-down',
+    'page-up',
+    'right',
+    'space',
+    'tab',
+    'up',
+]);
 
 function isObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -173,8 +190,8 @@ function sanitizeConfig(cfg) {
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
     cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
     cfg.ui.fileApps = lowerStringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
-    cfg.ui.terminalApps = lowerStringList(cfg.ui.terminalApps, DEFAULTS.ui.terminalApps);
-    cfg.ui.pasteOverrides = pasteOverrides(cfg.ui.pasteOverrides);
+    cfg.ui.defaultPasteKeys = pasteKeys(cfg.ui.defaultPasteKeys, DEFAULTS.ui.defaultPasteKeys, 'ui.defaultPasteKeys');
+    cfg.ui.pasteKeybindings = pasteKeybindings(cfg.ui.pasteKeybindings);
 
     return cfg;
 }
@@ -215,17 +232,62 @@ function lowerStringList(value, fallback) {
     return stringList(value, fallback).map(v => v.toLowerCase());
 }
 
-function pasteOverrides(value) {
+function normalizePasteKey(value) {
+    const key = String(value ?? '').trim().toLowerCase();
+    if (key === 'control')
+        return 'ctrl';
+    if (key === 'return')
+        return 'enter';
+    if (key === 'esc')
+        return 'escape';
+    if (key === 'pgdn')
+        return 'page-down';
+    if (key === 'pgup')
+        return 'page-up';
+    if (/^[a-z0-9]$/.test(key) || /^f([1-9]|1[0-2])$/.test(key) || NAMED_KEYS.has(key))
+        return key;
+    return '';
+}
+
+function pasteKeys(value, fallback, path) {
+    if (!Array.isArray(value)) {
+        log.warn(`config key ${path}: invalid paste keys${fallback ? ', keeping default' : ''}`);
+        return fallback ? fallback.slice() : null;
+    }
+    const keys = [];
+    for (const item of value.slice(0, 8)) {
+        const key = normalizePasteKey(item);
+        if (!key) {
+            log.warn(`config key ${path}: invalid paste key ignored: ${String(item)}`);
+            continue;
+        }
+        keys.push(key);
+    }
+    return keys;
+}
+
+function pasteKeybindings(value) {
     if (!Array.isArray(value))
         return [];
-    return value
-        .filter(isObject)
-        .map(o => ({
-            match: typeof o.match === 'string' ? o.match : '',
-            combo: PASTE_COMBOS.has(o.combo) ? o.combo : 'ctrl-v',
-        }))
-        .filter(o => o.match !== '')
-        .slice(0, 100);
+    const out = [];
+    for (const item of value.slice(0, 100)) {
+        if (!isObject(item)) {
+            log.warn(`invalid paste keybinding ignored: ${String(item)}`);
+            continue;
+        }
+        const apps = lowerStringList(item.apps, []);
+        if (apps.length === 0) {
+            log.warn(`invalid paste keybinding ignored: apps must be a non-empty string list`);
+            continue;
+        }
+        const keys = pasteKeys(item.keys, null, 'ui.pasteKeybindings.keys');
+        if (keys == null || (item.keys.length > 0 && keys.length === 0)) {
+            log.warn(`invalid paste keybinding ignored: keys must be a valid paste key list`);
+            continue;
+        }
+        out.push({ keys, apps });
+    }
+    return out;
 }
 
 // Which config file the loader will pick, by existence (loadConfig parses the winner). Single

@@ -16,6 +16,8 @@ copy-gnome config get general.captureImages
 copy-gnome config set general.captureImages false
 copy-gnome config get general.denyAllMemorySources
 copy-gnome config set ui.fileApps '["org.gnome.nautilus"]'
+copy-gnome config set ui.defaultPasteKeys '["ctrl","v"]'
+copy-gnome config set ui.pasteKeybindings '[{"keys":["ctrl","shift","v"],"apps":["terminal"]}]'
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
 copy-gnome config set ui.popupTheme auto
 copy-gnome config set ui.popupOpacity 0.92

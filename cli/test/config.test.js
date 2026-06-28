@@ -90,11 +90,11 @@ test("type mismatch keeps the default with a warning", () => {
 });
 
 test("numeric value above max is clamped", () => {
-  const dir = cfgDir("history:\n  maxItems: 500\n");
+  const dir = cfgDir("history:\n  maxItems: 999\n");
   try {
     const r = loadConfig(dir);
-    assert.equal(r.config.history.maxItems, 100);
-    assert.ok(r.warnings.some(w => /clamped 500 -> 100/.test(w)));
+    assert.equal(r.config.history.maxItems, 500);
+    assert.ok(r.warnings.some(w => /clamped 999 -> 500/.test(w)));
   } finally {
     cleanup(dir);
   }
@@ -196,23 +196,40 @@ test("fileApps are lower-cased", () => {
   }
 });
 
-test("pasteOverrides: invalid entries dropped with warnings, valid kept", () => {
+test("pasteKeybindings: keys and apps normalized, invalid entries dropped", () => {
   const yaml = [
     "ui:",
-    "  pasteOverrides:",
-    "    - match: Emacs",
-    "      combo: none",
-    "    - match: BadCombo",
-    "      combo: bogus",
-    "    - combo: ctrl-v",
+    "  defaultPasteKeys: [Control, V]",
+    "  pasteKeybindings:",
+    "    - keys: [CTRL, Shift, V]",
+    "      apps: [Terminal, Console]",
+    "    - keys: [shift, shift, Insert]",
+    "      apps: [LegacyTerm]",
+    "    - keys: [shift, shift]",
+    "      apps: [ModifierOnly]",
+    "    - keys: [ctrl, a, e]",
+    "      apps: [MultiStep]",
+    "    - keys: [p]",
+    "      apps: [LetterOnly]",
+    "    - keys: [bogus]",
+    "      apps: [BadKey]",
+    "    - keys: [ctrl, v]",
+    "      apps: []",
     "",
   ].join("\n");
   const dir = cfgDir(yaml);
   try {
     const r = loadConfig(dir);
-    assert.deepEqual(r.config.ui.pasteOverrides, [{ match: "Emacs", combo: "none" }]);
-    const overrideWarnings = r.warnings.filter(w => /invalid paste override/.test(w));
-    assert.equal(overrideWarnings.length, 2);
+    assert.deepEqual(r.config.ui.defaultPasteKeys, ["ctrl", "v"]);
+    assert.deepEqual(r.config.ui.pasteKeybindings, [
+      { keys: ["ctrl", "shift", "v"], apps: ["terminal", "console"] },
+      { keys: ["shift", "shift", "insert"], apps: ["legacyterm"] },
+      { keys: ["shift", "shift"], apps: ["modifieronly"] },
+      { keys: ["ctrl", "a", "e"], apps: ["multistep"] },
+      { keys: ["p"], apps: ["letteronly"] },
+    ]);
+    const bindingWarnings = r.warnings.filter(w => /invalid paste keybinding/.test(w));
+    assert.equal(bindingWarnings.length, 2);
   } finally {
     cleanup(dir);
   }

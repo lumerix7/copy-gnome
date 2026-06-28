@@ -258,7 +258,7 @@ The Shell extension itself should not watch old clips files and live-repair them
   `min(storage.binaryMaxBytes, history.maxItemBytes)` for image/binary.
 - Snapshot lines have an internal 64 MiB hard cap. If a snapshot would exceed it, oldest
   entries are trimmed until it fits; actual retained count may be lower than `maxItems`.
-- `history.maxItems`: visible in-memory history cap, default 30, max 100.
+- `history.maxItems`: visible in-memory history cap, default 100, max 500.
 - `history.maxItemBytes`: per-item cap, default 4 MiB, max 16 MiB.
 
 

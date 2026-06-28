@@ -12,7 +12,7 @@ export const DEFAULTS = {
     allowMemoryMimes: ["image/*"],
   },
   history: {
-    maxItems: 30,
+    maxItems: 100,
     maxItemBytes: 4194304,
     maxAgeDays: 3,
     cleanupIntervalSec: 86400,
@@ -41,8 +41,8 @@ export const DEFAULTS = {
     pasteRestoresFocus: true,
     skipClipboardWriteForRecentTopSec: 3,
     fileApps: ["org.gnome.nautilus"],
-    terminalApps: ["terminal"],
-    pasteOverrides: [],
+    defaultPasteKeys: ["ctrl", "v"],
+    pasteKeybindings: [{ keys: ["ctrl", "shift", "v"], apps: ["terminal"] }],
   },
   logging: {
     level: "info",
@@ -56,7 +56,7 @@ export const ENUMS = {
 };
 
 export const LIMITS = {
-  "history.maxItems": [1, 100],
+  "history.maxItems": [1, 500],
   "history.maxItemBytes": [1024, 16 * 1024 * 1024],
   "history.maxAgeDays": [0, 3650],
   "history.cleanupIntervalSec": [15, 864000],
@@ -102,8 +102,8 @@ export const CONFIG_KEYS = [
   "ui.pasteRestoresFocus",
   "ui.skipClipboardWriteForRecentTopSec",
   "ui.fileApps",
-  "ui.terminalApps",
-  "ui.pasteOverrides",
+  "ui.defaultPasteKeys",
+  "ui.pasteKeybindings",
   "logging.level",
 ];
 
@@ -209,8 +209,8 @@ function sanitizeConfig(config, warnings) {
   config.privacy.secretMimes = stringList(config.privacy.secretMimes, []);
   config.general.allowMemoryMimes = stringList(config.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
   config.ui.fileApps = lowerStringList(config.ui.fileApps, DEFAULTS.ui.fileApps);
-  config.ui.terminalApps = lowerStringList(config.ui.terminalApps, DEFAULTS.ui.terminalApps);
-  config.ui.pasteOverrides = pasteOverrides(config.ui.pasteOverrides, warnings);
+  config.ui.defaultPasteKeys = pasteKeys(config.ui.defaultPasteKeys, DEFAULTS.ui.defaultPasteKeys, "ui.defaultPasteKeys", warnings);
+  config.ui.pasteKeybindings = pasteKeybindings(config.ui.pasteKeybindings, warnings);
   return config;
 }
 
@@ -259,19 +259,80 @@ function lowerStringList(value, fallback) {
   return stringList(value, fallback).map(x => x.toLowerCase());
 }
 
-function pasteOverrides(value, warnings) {
-  if (!Array.isArray(value))
-    return [];
-  const allowed = new Set(["ctrl-v", "ctrl-shift-v", "shift-insert", "none"]);
-  const out = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object")
-      continue;
-    if (typeof item.match !== "string" || !allowed.has(item.combo)) {
-      warnings.push(`invalid paste override ignored: ${JSON.stringify(item)}`);
+const MODIFIER_KEYS = new Set(["ctrl", "shift", "alt", "super"]);
+const NAMED_KEYS = new Set([
+  ...MODIFIER_KEYS,
+  "backspace",
+  "delete",
+  "down",
+  "end",
+  "enter",
+  "escape",
+  "home",
+  "insert",
+  "left",
+  "page-down",
+  "page-up",
+  "right",
+  "space",
+  "tab",
+  "up",
+]);
+
+function normalizePasteKey(value) {
+  const key = String(value ?? "").trim().toLowerCase();
+  if (key === "control")
+    return "ctrl";
+  if (key === "return")
+    return "enter";
+  if (key === "esc")
+    return "escape";
+  if (key === "pgdn")
+    return "page-down";
+  if (key === "pgup")
+    return "page-up";
+  if (/^[a-z0-9]$/.test(key) || /^f([1-9]|1[0-2])$/.test(key) || NAMED_KEYS.has(key))
+    return key;
+  return "";
+}
+
+function pasteKeys(value, fallback, field, warnings) {
+  if (!Array.isArray(value)) {
+    warnings.push(`config key ${field}: invalid paste keys${fallback ? ", keeping default" : ""}`);
+    return fallback ? fallback.slice() : null;
+  }
+  const keys = [];
+  for (const item of value.slice(0, 8)) {
+    const key = normalizePasteKey(item);
+    if (!key) {
+      warnings.push(`config key ${field}: invalid paste key ignored: ${String(item)}`);
       continue;
     }
-    out.push({ match: item.match, combo: item.combo });
+    keys.push(key);
+  }
+  return keys;
+}
+
+function pasteKeybindings(value, warnings) {
+  if (!Array.isArray(value))
+    return [];
+  const out = [];
+  for (const item of value.slice(0, 100)) {
+    if (!isPlainObject(item)) {
+      warnings.push(`invalid paste keybinding ignored: ${JSON.stringify(item)}`);
+      continue;
+    }
+    const apps = lowerStringList(item.apps, []);
+    if (apps.length === 0) {
+      warnings.push("invalid paste keybinding ignored: apps must be a non-empty string list");
+      continue;
+    }
+    const keys = pasteKeys(item.keys, null, "ui.pasteKeybindings.keys", warnings);
+    if (keys == null || (item.keys.length > 0 && keys.length === 0)) {
+      warnings.push("invalid paste keybinding ignored: keys must be a valid paste key list");
+      continue;
+    }
+    out.push({ keys, apps });
   }
   return out;
 }

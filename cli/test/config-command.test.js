@@ -68,7 +68,7 @@ test("setConfigValue round-trips a boolean and writes config.yaml", () => {
 test("setConfigValue rejects an out-of-range number", () => {
   const r = setConfigValue("history.maxItems", "999");
   assert.equal(r.ok, false);
-  assert.match(r.error, /must be between 1 and 100/);
+  assert.match(r.error, /must be between 1 and 500/);
 });
 
 test("setConfigValue rejects a bad enum value", () => {

@@ -576,10 +576,10 @@ export default class CopyGnomeExtension extends Extension {
                 if (this._enabled) {
                     this._restorePasteFocus(targetWindow);
                     const plan = this._resolvePastePlan();
-                    log.debug(`[paste]: before inject recordId=${rec?.id ?? '(none)'} wm_class="${debugValue(plan.wmClass)}" normalized="${debugValue(plan.normalized)}" combo=${plan.combo} reason=${plan.reason} match=${plan.match || '(none)'}`);
-                    const ok = paste(plan.combo, '[paste]');
+                    log.debug(`[paste]: before inject recordId=${rec?.id ?? '(none)'} wm_class="${debugValue(plan.wmClass)}" normalized="${debugValue(plan.normalized)}" keys=${plan.keys.join('+') || '(none)'} reason=${plan.reason} match=${plan.match || '(none)'}`);
+                    const ok = paste(plan.keys, '[paste]');
                     if (!ok)
-                        log.warn(`[paste]: injection failed recordId=${rec?.id ?? '(none)'} combo=${plan.combo} wm_class="${debugValue(plan.wmClass)}"`);
+                        log.warn(`[paste]: injection failed recordId=${rec?.id ?? '(none)'} keys=${plan.keys.join('+') || '(none)'} wm_class="${debugValue(plan.wmClass)}"`);
                 }
             } catch (e) {
                 log.warn(`scheduled paste failed: ${e.message}`);
@@ -634,12 +634,11 @@ export default class CopyGnomeExtension extends Extension {
 
     // Pick the paste keystroke for the currently focused window. There is no semantic
     // "paste" on Wayland, so this is per-app; the clipboard is already set regardless.
-    _resolvePasteCombo() {
-        return this._resolvePastePlan().combo;
-    }
-
     _resolvePastePlan() {
-        const fallback = { combo: 'ctrl-v', reason: 'default', match: '', wmClass: '', normalized: '' };
+        const fallbackKeys = Array.isArray(this._config?.ui?.defaultPasteKeys)
+            ? this._config.ui.defaultPasteKeys
+            : ['ctrl', 'v'];
+        const fallback = { keys: fallbackKeys, reason: 'default', match: '', wmClass: '', normalized: '' };
         if (!this._config)
             return { ...fallback, reason: 'no-config' };
         let wmClass = '';
@@ -655,26 +654,20 @@ export default class CopyGnomeExtension extends Extension {
             return { ...fallback, reason: 'no-wm-class', wmClass, normalized: hay };
         const ui = this._config.ui ?? {};
 
-        for (const o of ui.pasteOverrides ?? []) {
-            const match = String(o?.match ?? '').toLowerCase();
-            if (match && hay.includes(match))
+        for (const binding of ui.pasteKeybindings ?? []) {
+            const keys = Array.isArray(binding?.keys) ? binding.keys : null;
+            if (!keys)
+                continue;
+            const match = this._matchingConfigSubstring(hay, binding.apps ?? []);
+            if (match)
                 return {
-                    combo: o.combo ?? 'ctrl-v',
-                    reason: 'pasteOverride',
+                    keys,
+                    reason: 'pasteKeybindings',
                     match,
                     wmClass,
                     normalized: hay,
                 };
         }
-        const terminalMatch = this._matchingConfigSubstring(hay, ui.terminalApps ?? []);
-        if (terminalMatch)
-            return {
-                combo: 'ctrl-shift-v',
-                reason: 'terminalApps',
-                match: terminalMatch,
-                wmClass,
-                normalized: hay,
-            };
         return { ...fallback, wmClass, normalized: hay };
     }
 }

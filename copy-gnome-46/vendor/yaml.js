@@ -170,7 +170,7 @@ export function parseYaml(text) {
 }
 
 // Minimal YAML serializer that mirrors the subset parseYaml reads: nested block maps, block
-// sequences of scalars or of small maps (pasteOverrides), empty [], and scalars
+// sequences of scalars or of small maps (pasteKeybindings), empty [], and scalars
 // (bool/int/float/string/null). Strings that YAML would parse as another type, or that contain
 // structural/control characters, are double-quoted. Used by the prefs GUI to write config.yaml
 // so GUI edits take effect even when a hand-written YAML is present.
