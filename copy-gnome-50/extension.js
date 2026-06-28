@@ -42,11 +42,12 @@ function eventCtx(id, seq, fallback = 'extension') {
 
 function filePreview(uriList) {
     const uris = uriList.split('\n').filter(Boolean);
-    let first = uris[0] || '';
+    const firstUri = uris[0] || '';
+    let first = fileUriPath(firstUri) ?? firstUri;
     try {
         first = decodeURIComponent(first);
     } catch (e) {
-        log.debug(`[restore]: file preview decode failed uri="${debugValue(first)}": ${e.message}`);
+        log.debug(`[capture]: file preview decode failed uri="${debugValue(firstUri)}" value="${debugValue(first)}" reason=${e.message}`);
     }
     return uris.length > 1 ? `${first} (+${uris.length - 1} more)` : first;
 }
