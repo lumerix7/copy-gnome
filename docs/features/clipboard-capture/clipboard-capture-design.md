@@ -89,25 +89,30 @@ convention across all four flows:
 
 ```mermaid
 flowchart TD
-    A["1 backup eq getLastContent"] --> B["2 setLastContent origin=restore type=kind value=content id=newUuid sourceKind=memory source=self-restore"]
-    B --> C{"3 write system clipboard ok"}
-    C -- yes --> D["4 history.touch rec - MRU front, async persist, no echo wait"]
-    C -- no --> E["5 setLastContentIfIs backup - rollback"]
+    A["1 check recent row-1 restore window"] --> B{"2 skip system clipboard write?"}
+    B -- yes --> D["5 history.touch rec - MRU front, async persist"]
+    B -- no --> C["3 backup + setLastContent + write system clipboard"]
+    C --> W{"4 write ok"}
+    W -- yes --> D
+    W -- no --> E["setLastContentIfIs backup - rollback"]
     D --> F["6 autoPaste if enabled"]
 ```
 
-1. **backup** the current `_lastContent` so a failed write can be rolled back.
-2. **setLastContent** with `origin='restore'`, `type=`restored kind, `value=`written content,
-   fresh `id`, `sourceKind='memory'`, `source='(self-restore)'`. No timer.
-3. **Write** the real system clipboard (`setText` / `setContent`).
-4. On **success**, `history.touch(rec)` - MRU front in memory, async persist. We do **not**
-   wait for the echo, so the UI never flickers.
-5. On **failure**, `setLastContentIfIs(backup)` - roll back if `_lastContent` is still the
-   restore marker.
+1. Check whether the selected record was row 1 in the sorted history and its `usedAt` is
+   inside `ui.skipClipboardWriteForRecentTopSec` (`0` disables).
+2. If the recent row-1 shortcut applies, skip only the system clipboard write.
+3. Otherwise **backup** the current `_lastContent`, **setLastContent** with
+   `origin='restore'`, `type=`restored kind, `value=`written content, fresh `id`,
+   `sourceKind='memory'`, `source='(self-restore)'`, then write the real system clipboard
+   (`setText` / `setContent`).
+4. On **write success** or **write skip**, `history.touch(rec)` - MRU front in memory,
+   async persist. We do **not** wait for the echo, so the UI never flickers.
+5. On **write failure**, `setLastContentIfIs(backup)` - roll back if `_lastContent` is still
+   the restore marker.
 6. If `ui.autoPaste`, schedule the paste keystroke.
 
-The echo arrives later as a memory event with the same `type`+`value` and is dropped on the
-drain side. Restore itself enqueues nothing.
+When a write happened, the echo arrives later as a memory event with the same `type`+`value`
+and is dropped on the drain side. Restore itself enqueues nothing.
 
 
 ## Flow 2 - Enqueue (producer; `owner-changed` handler)

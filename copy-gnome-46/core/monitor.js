@@ -73,6 +73,19 @@ function jobCtx(job) {
     return eventCtx(job?.id, job?.seq);
 }
 
+function readLimitDetails(result, capName, fallbackMaxBytes = null) {
+    const parts = [];
+    if (Number.isFinite(result?.bytesRead))
+        parts.push(`bytesRead=${result.bytesRead}`);
+    if (Number.isFinite(result?.maxBytes))
+        parts.push(`maxBytes=${result.maxBytes}`);
+    else if (Number.isFinite(fallbackMaxBytes))
+        parts.push(`maxBytes=${fallbackMaxBytes}`);
+    if (capName)
+        parts.push(`cap=${capName}`);
+    return parts.length ? ` ${parts.join(' ')}` : '';
+}
+
 // memory = Shell-owned (our own writes, screenshots, Mutter caches); everything else
 // (Wayland / X11 clients) is a real external copy.
 function sourceKindFromLabel(label) {
@@ -100,13 +113,23 @@ function uriListEntries(uriListText) {
         .filter(Boolean);
 }
 
+function normalizeFileUri(line) {
+    if (line.startsWith('file://'))
+        return line;
+    if (/^file:\/(?!\/)/.test(line))
+        return `file://${line.slice('file:'.length)}`;
+    return line;
+}
+
 // Canonical form for a uri-list: drop CRs/blank lines and trim each entry. Used as the
-// file entry's stored content.
+// file entry's stored content. Accept authority-less file:/absolute/path input but store
+// standard file:///absolute/path output.
 function normalizeUriList(text) {
     return text
         .split('\n')
         .map(line => line.replace(/\r$/, '').trim())
         .filter(Boolean)
+        .map(normalizeFileUri)
         .join('\n');
 }
 
@@ -128,7 +151,7 @@ function parseSpecialCopiedFiles(text) {
 export class Monitor {
     constructor({
         onCapture, onSuppressedRepeat, captureFiles, captureImages, maxItemBytes,
-        maxBinaryBytes, secretMimes, denyAllMemorySources, allowMemoryMimes,
+        maxTextBytes, maxBinaryBytes, secretMimes, denyAllMemorySources, allowMemoryMimes,
     } = {}) {
         this._onCapture = typeof onCapture === 'function' ? onCapture : (() => {});
         this._onSuppressedRepeat = typeof onSuppressedRepeat === 'function' ? onSuppressedRepeat : (() => {});
@@ -137,6 +160,7 @@ export class Monitor {
         this._denyAllMemorySources = denyAllMemorySources ?? (() => true);
         this._allowMemoryMimes = allowMemoryMimes ?? (() => []);
         this._maxItemBytes = maxItemBytes ?? (() => 16 * 1024 * 1024);
+        this._maxTextBytes = maxTextBytes ?? this._maxItemBytes;
         this._maxBinaryBytes = maxBinaryBytes ?? this._maxItemBytes;
         this._secretMimes = secretMimes ?? (() => []);
         this._selection = null;
@@ -380,11 +404,13 @@ export class Monitor {
                     }
                     const fallbackMime = fileMimes[fileMimes.indexOf(candidateMime) + 1] ?? '';
                     if (fallbackMime) {
-                        log.warn(`${jobCtx(job)}: file clipboard read failed mime=${candidateMime} reason=${result.reason} fallbackMime=${fallbackMime}`);
+                        const details = readLimitDetails(result, 'history.maxItemBytes', this._maxItemBytes());
+                        log.warn(`${jobCtx(job)}: file clipboard read failed mime=${candidateMime} reason=${result.reason}${details} fallbackMime=${fallbackMime}`);
                         continue;
                     }
-                    log.warn(`${jobCtx(job)}: file clipboard read skipped mime=${candidateMime} reason=${result.reason}`);
-                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file mime=${candidateMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    const details = readLimitDetails(result, 'history.maxItemBytes', this._maxItemBytes());
+                    log.warn(`${jobCtx(job)}: file clipboard read skipped mime=${candidateMime} reason=${result.reason}${details}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file mime=${candidateMime} reason=${result.reason}${details} remaining=${this._queue.length}`);
                     return;
                 }
                 log.debug(`${jobCtx(job)}: source read file mime=${mime} bytes=${result.bytes.length}`);
@@ -415,11 +441,16 @@ export class Monitor {
 
             // Prefer text when offered; many apps offer both text and image targets.
             if (plainMime) {
-                const result = await this._readSourceBytes(job.source, plainMime, this._maxItemBytes());
+                const maxBytes = Math.min(this._maxItemBytes(), this._maxTextBytes());
+                const capName = this._maxTextBytes() <= this._maxItemBytes()
+                    ? 'storage.textMaxBytes'
+                    : 'history.maxItemBytes';
+                const result = await this._readSourceBytes(job.source, plainMime, maxBytes);
                 if (this._stopped) return;
                 if (!result.ok) {
-                    log.warn(`${jobCtx(job)}: text clipboard read skipped mime=${plainMime} reason=${result.reason}`);
-                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    const details = readLimitDetails(result, capName, maxBytes);
+                    log.warn(`${jobCtx(job)}: text clipboard read skipped mime=${plainMime} reason=${result.reason}${details}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=${result.reason}${details} remaining=${this._queue.length}`);
                     return;
                 }
                 log.debug(`${jobCtx(job)}: source read text mime=${plainMime} bytes=${result.bytes.length}`);
@@ -456,7 +487,10 @@ export class Monitor {
                     log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=unsupported-mime remaining=${this._queue.length}`);
                     return;
                 }
-                const maxBytes = this._maxBinaryBytes();
+                const maxBytes = Math.min(this._maxItemBytes(), this._maxBinaryBytes());
+                const capName = this._maxBinaryBytes() <= this._maxItemBytes()
+                    ? 'storage.binaryMaxBytes'
+                    : 'history.maxItemBytes';
                 if (maxBytes <= 0) {
                     log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=binary-cap-zero remaining=${this._queue.length}`);
                     return;
@@ -465,7 +499,8 @@ export class Monitor {
                 if (this._stopped) return;
                 if (!result.ok) {
                     this._noteImageReadFailure(result.reason, imageMime);
-                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image mime=${imageMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    const details = readLimitDetails(result, capName, maxBytes);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image mime=${imageMime} reason=${result.reason}${details} remaining=${this._queue.length}`);
                     return;
                 }
                 log.debug(`${jobCtx(job)}: source read image mime=${imageMime} bytes=${result.bytes.length}`);
@@ -543,13 +578,13 @@ export class Monitor {
 
     async _readSourceBytes(source, mime, maxBytes) {
         if (!Number.isFinite(maxBytes) || maxBytes <= 0)
-            return { ok: false, bytes: null, reason: 'oversize' };
+            return { ok: false, bytes: null, reason: 'oversize', bytesRead: 0, maxBytes };
         const opened = await this._readSourceStream(source, mime);
         if (!opened.ok)
-            return { ok: false, bytes: null, reason: opened.reason };
+            return { ok: false, bytes: null, reason: opened.reason, bytesRead: 0, maxBytes };
         const stream = opened.stream;
         if (!stream)
-            return { ok: false, bytes: null, reason: 'empty' };
+            return { ok: false, bytes: null, reason: 'empty', bytesRead: 0, maxBytes };
         const chunks = [];
         let total = 0;
         try {
@@ -562,24 +597,24 @@ export class Monitor {
                     break;
                 total += data.length;
                 if (total > maxBytes)
-                    return { ok: false, bytes: null, reason: 'oversize' };
+                    return { ok: false, bytes: null, reason: 'oversize', bytesRead: total, maxBytes };
                 chunks.push(Uint8Array.from(data));
             }
         } catch (e) {
             log.warn(`selection source ${mime} stream read failed: ${e.message}`);
-            return { ok: false, bytes: null, reason: 'read-error' };
+            return { ok: false, bytes: null, reason: 'read-error', bytesRead: total, maxBytes };
         } finally {
             await this._closeStream(stream);
         }
         if (total <= 0)
-            return { ok: false, bytes: null, reason: 'empty' };
+            return { ok: false, bytes: null, reason: 'empty', bytesRead: total, maxBytes };
         const out = new Uint8Array(total);
         let offset = 0;
         for (const chunk of chunks) {
             out.set(chunk, offset);
             offset += chunk.length;
         }
-        return { ok: true, bytes: out, reason: '' };
+        return { ok: true, bytes: out, reason: '', bytesRead: total, maxBytes };
     }
 
     _readStreamChunk(stream, mime) {

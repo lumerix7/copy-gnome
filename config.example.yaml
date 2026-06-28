@@ -19,8 +19,8 @@ history:
 
 storage:
   backend: jsonl
-  textMaxBytes: 65536             # 64 KiB; larger text payloads are skipped
-  binaryMaxBytes: 16384           # 16 KiB; larger non-file image/binary payloads are skipped
+  textMaxBytes: 1048576           # 1 MiB default; max 15 MiB, also bounded by maxItemBytes
+  binaryMaxBytes: 1048576         # 1 MiB default; max 10 MiB raw, also bounded by maxItemBytes
   flushIntervalSec: 300           # append latest snapshot once per N sec (the only disk writer)
 
 privacy:
@@ -38,18 +38,19 @@ ui:
   popupOpacity: 0.82              # whole panel opacity, 0.1..1
   numberPickTimeoutMs: 500        # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false           # reserved; current popup uses text-only image previews
-  autoPaste: true                 # also inject the paste keystroke after restore. The
-                                  # clipboard is ALWAYS set regardless, so you can paste
-                                  # manually even if auto-paste picks the wrong combo.
+  autoPaste: true                 # also inject the paste keystroke after restore
   autoPasteDelayMs: 220           # delay before injecting paste after popup closes
   pasteRestoresFocus: true
+  skipClipboardWriteForRecentTopSec: 3
+                                  # 0 disables. If row 1 was updated within this many
+                                  # seconds, restore/paste it without rewriting clipboard.
   fileApps:                      # lower-case wm_class substrings that receive copied
     - org.gnome.nautilus         # files as text/uri-list; others receive path text
   # Terminals paste with Ctrl+Shift+V (matched by wm_class substring):
   terminalApps:
     - terminal
   # Per-app overrides, checked before terminalApps. combo: ctrl-v | ctrl-shift-v |
-  # shift-insert | none  (none = only set the clipboard, no keystroke).
+  # shift-insert | none  (none = restore clipboard only, no keystroke).
   pasteOverrides: []
   #   - match: Emacs
   #     combo: none

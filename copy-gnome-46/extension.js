@@ -55,15 +55,41 @@ function uriListCount(uriList) {
     return uriList.split('\n').filter(Boolean).length;
 }
 
+function fileUriPath(uri) {
+    if (uri.startsWith('file://'))
+        return uri.replace(/^file:\/\//, '');
+    if (/^file:\/(?!\/)/.test(uri))
+        return uri.replace(/^file:/, '');
+    return null;
+}
+
+function normalizeFileUri(uri) {
+    if (uri.startsWith('file://'))
+        return uri;
+    if (/^file:\/(?!\/)/.test(uri))
+        return `file://${uri.slice('file:'.length)}`;
+    return uri;
+}
+
+function normalizeUriListForRestore(uriList) {
+    return uriList
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(normalizeFileUri)
+        .join('\n');
+}
+
 function filePathText(uriList) {
     const paths = [];
     for (const line of uriList.split('\n').map(l => l.trim()).filter(Boolean)) {
-        if (!line.startsWith('file://')) {
+        const pathPart = fileUriPath(line);
+        if (pathPart == null) {
             paths.push(line);
             continue;
         }
         try {
-            paths.push(decodeURIComponent(line.replace(/^file:\/\//, '')));
+            paths.push(decodeURIComponent(pathPart));
         } catch (e) {
             log.debug(`[restore]: file path decode failed uri="${debugValue(line)}" reason=${e.message}`);
         }
@@ -137,6 +163,7 @@ export default class CopyGnomeExtension extends Extension {
             denyAllMemorySources: () => this._config.general.denyAllMemorySources,
             allowMemoryMimes: () => this._config.general.allowMemoryMimes,
             maxItemBytes: () => this._config.history.maxItemBytes,
+            maxTextBytes: () => this._config.storage.textMaxBytes,
             maxBinaryBytes: () => this._config.storage.binaryMaxBytes,
             secretMimes: () => this._config.privacy.secretMimes,
         });
@@ -388,9 +415,9 @@ export default class CopyGnomeExtension extends Extension {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return;
-            // Always write to the real system clipboard (this is the core action).
-            // Only continue to MRU/paste after the clipboard write succeeds; otherwise
-            // auto-paste could paste stale clipboard content.
+            const recentTop = this._recentTopRestoreWindow(rec, this._config?.ui?.skipClipboardWriteForRecentTopSec ?? 0);
+            // Usually restore writes to the real system clipboard first. The recent row-1
+            // shortcut skips only that write; validation, MRU touch, and paste continue.
             let wrote = false;
             // Self-write filtering lives in the monitor: record what we are about to write
             // (origin 'restore', sourceKind 'memory'), then write. The drain side drops the
@@ -399,6 +426,12 @@ export default class CopyGnomeExtension extends Extension {
             const backup = this._monitor.getLastContent();
             const markSelfWrite = (type, value) =>
                 this._monitor.setLastContent({ origin: 'restore', type, value, sourceKind: 'memory', source: '(self-restore)' });
+            const skipWrite = type => {
+                const skip = !!recentTop;
+                if (skip)
+                    log.debug(`[restore]: clipboard write skipped recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top row=${recentTop.rowNumber} ageMs=${recentTop.ageMs} windowSec=${recentTop.windowSec}`);
+                return skip;
+            };
             if (rec.kind === 'image' && rec.data) {
                 if (!this._config.general.captureImages) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=disabled`);
@@ -409,13 +442,18 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=invalid-base64`);
                     return;
                 }
-                markSelfWrite('image', rec.data);
-                wrote = Clipboard.setContent(rec.mime, u8);
+                if (skipWrite('image'))
+                    wrote = true;
+                else {
+                    markSelfWrite('image', rec.data);
+                    wrote = Clipboard.setContent(rec.mime, u8);
+                }
             } else if (rec.kind === 'file' && rec.uri) {
                 if (!this._config.general.captureFiles) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=disabled`);
                     return;
                 }
+                const restoreUri = normalizeUriListForRestore(rec.uri);
                 const wmClass = this._targetWmClass(targetWindow);
                 const restoreFileUri = this._shouldRestoreFileUri(wmClass);
                 const mode = restoreFileUri ? 'file' : 'path';
@@ -423,31 +461,47 @@ export default class CopyGnomeExtension extends Extension {
                 const fileMatch = this._matchingConfigSubstring(wmClass, fileApps);
                 log.debug(`[restore]: file target recordId=${rec.id} wm_class="${debugValue(wmClass)}" normalized="${debugValue(String(wmClass ?? '').toLowerCase())}" mode=${mode} match=${fileMatch || '(none)'} fileApps=${fileApps.join(',') || '(none)'}`);
                 if (restoreFileUri) {
-                    markSelfWrite('file', rec.uri);
-                    wrote = Clipboard.setContent('text/uri-list', encodeUtf8(rec.uri));
-                    log.debug(`[restore]: file clipboard write mode=file recordId=${rec.id} uriCount=${uriListCount(rec.uri)} uriList="${debugValue(rec.uri)}"`);
+                    if (skipWrite('file'))
+                        wrote = true;
+                    else {
+                        markSelfWrite('file', restoreUri);
+                        wrote = Clipboard.setContent('text/uri-list', encodeUtf8(restoreUri));
+                        log.debug(`[restore]: file clipboard write mode=file recordId=${rec.id} uriCount=${uriListCount(restoreUri)} uriList="${debugValue(restoreUri)}"`);
+                    }
                 } else {
-                    const pathText = filePathText(rec.uri);
+                    const pathText = filePathText(restoreUri);
                     if (!pathText) {
-                        log.warn(`[restore]: file restore skipped recordId=${rec.id} reason=no-path-text uriList="${debugValue(rec.uri)}"`);
+                        log.warn(`[restore]: file restore skipped recordId=${rec.id} reason=no-path-text uriList="${debugValue(restoreUri)}"`);
                         return;
                     }
-                    markSelfWrite('text', pathText);
-                    wrote = Clipboard.setText(pathText);
-                    log.debug(`[restore]: file clipboard write mode=path recordId=${rec.id} bytes=${byteLength(pathText)} uriCount=${uriListCount(rec.uri)} value="${debugValue(pathText)}"`);
+                    if (skipWrite('text'))
+                        wrote = true;
+                    else {
+                        markSelfWrite('text', pathText);
+                        wrote = Clipboard.setText(pathText);
+                        log.debug(`[restore]: file clipboard write mode=path recordId=${rec.id} bytes=${byteLength(pathText)} uriCount=${uriListCount(restoreUri)} value="${debugValue(pathText)}"`);
+                    }
                 }
             } else if (rec.text != null) {
-                markSelfWrite('text', rec.text);
-                log.debug(`[restore]: text clipboard write recordId=${rec.id} bytes=${byteLength(rec.text)} value="${debugValue(rec.text)}"`);
-                wrote = Clipboard.setText(rec.text);
+                if (skipWrite('text'))
+                    wrote = true;
+                else {
+                    markSelfWrite('text', rec.text);
+                    log.debug(`[restore]: text clipboard write recordId=${rec.id} bytes=${byteLength(rec.text)} value="${debugValue(rec.text)}"`);
+                    wrote = Clipboard.setText(rec.text);
+                }
             } else if (rec.data) {
                 const u8 = GLib.base64_decode(rec.data);
                 if (!u8) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=${rec.kind ?? 'binary'} reason=invalid-base64`);
                     return;
                 }
-                markSelfWrite('binary', rec.data);
-                wrote = Clipboard.setContent(rec.mime, u8);
+                if (skipWrite('binary'))
+                    wrote = true;
+                else {
+                    markSelfWrite('binary', rec.data);
+                    wrote = Clipboard.setContent(rec.mime, u8);
+                }
             } else {
                 log.warn(`[restore]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-payload`);
                 return;
@@ -473,6 +527,25 @@ export default class CopyGnomeExtension extends Extension {
         } catch (e) {
             log.warn(`restore failed: ${e.message}`);
         }
+    }
+
+    _recentTopRestoreWindow(rec, windowSec) {
+        if (!(windowSec > 0) || !rec || typeof rec.usedAt !== 'number')
+            return null;
+        const selectedId = rec.id;
+        const items = this._history?.list() ?? [];
+        const rowIndex = items.findIndex(item => item.id === selectedId);
+        if (rowIndex !== 0)
+            return null;
+        const ageMicros = GLib.get_real_time() - rec.usedAt;
+        if (ageMicros < 0 || ageMicros > windowSec * 1000000)
+            return null;
+        return {
+            rowIndex,
+            rowNumber: rowIndex + 1,
+            ageMs: Math.max(0, Math.round(ageMicros / 1000)),
+            windowSec,
+        };
     }
 
     _schedulePaste(targetWindow = null, rec = null) {

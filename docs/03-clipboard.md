@@ -63,6 +63,10 @@ not wait for, synthesize, or promote a separate `text/plain` path entry. The fil
 the URI-list reference only; when the user restores it, the target app config decides whether
 to write `text/uri-list` or decoded path text.
 
+URI-list input accepts both standard `file:///absolute/path` and authority-less
+`file:/absolute/path` file URIs; copy-gnome stores and restores URI-list output as
+standard `file:///absolute/path`.
+
 When `x-special/gnome-copied-files` is offered, the first payload line may be `copy` or
 `cut`. The monitor logs this as `fileAction=copy|cut|unknown` and stores only the normalized
 URI list. Current restore treats the entry as a file reference, not as a destructive move.
@@ -103,6 +107,19 @@ and editors paste the path from the same entry - requires a multi-mime
 call). That is a planned enhancement, not yet implemented.
 
 
+### Recent top restore shortcut
+
+When the selected record is already row 1 and its `usedAt` timestamp is recent enough,
+`ui.skipClipboardWriteForRecentTopSec` skips the clipboard write and continues with the
+normal restore flow: MRU touch, async store flush scheduling, and optional auto-paste still
+run. The default is 3 seconds; `0` disables the shortcut, and the accepted range is
+0..900 seconds.
+
+This mainly avoids repeatedly rewriting the system clipboard during short bursts of row-1
+paste/restore. It also keeps file cut/paste flows closer to the compositor's current
+selection and reduces self-write clipboard queue noise during repeated row-1 paste.
+
+
 ## Auto-paste (optional)
 
 After write-back, optionally inject Ctrl+V. From inside the compositor this is allowed
@@ -130,10 +147,10 @@ clipboard via *its own* shortcut, so auto-paste must inject the app-appropriate 
   (`ctrl-v` | `ctrl-shift-v` | `shift-insert` | `none`) for apps with non-standard
   shortcuts; `none` skips injection.
 
-The **clipboard is always set** regardless of auto-paste, so even a wrong/`none` combo
-just means the user pastes manually with their own shortcut - nothing is lost. Auto-paste
-is enabled by default (`ui.autoPaste: true`) but is best-effort convenience on top of the
-guaranteed clipboard write.
+Restore normally writes the clipboard before auto-paste. The only configured exception is
+the recent row-1 shortcut above, which skips only that system clipboard write. Auto-paste
+is enabled by default (`ui.autoPaste: true`) but remains best-effort convenience on top of
+restore.
 
 
 ## Clipboard persistence (survive source app exit)

@@ -22,8 +22,8 @@ export const DEFAULTS = {
     },
     storage: {
         backend: 'jsonl',
-        textMaxBytes: 65536,        // 64 KiB
-        binaryMaxBytes: 16384,      // 16 KiB
+        textMaxBytes: 1024 * 1024,  // 1 MiB
+        binaryMaxBytes: 1024 * 1024, // 1 MiB
         flushIntervalSec: 300,       // append latest snapshot once per N sec (the only disk writer)
     },
     privacy: {
@@ -41,6 +41,7 @@ export const DEFAULTS = {
         autoPaste: true,
         autoPasteDelayMs: 220,
         pasteRestoresFocus: true,
+        skipClipboardWriteForRecentTopSec: 3,
         // wm_class substrings that should receive copied files as text/uri-list.
         // All other apps receive the decoded file path as text/plain.
         fileApps: ['org.gnome.nautilus'],
@@ -48,7 +49,7 @@ export const DEFAULTS = {
         terminalApps: ['terminal'],
         // Per-app paste combo overrides (checked before terminalApps). Each entry:
         //   { match: '<wm_class substring>', combo: 'ctrl-v'|'ctrl-shift-v'|'shift-insert'|'none' }
-        // Use 'none' to only set the clipboard (no keystroke) for an app.
+        // Use 'none' to restore the clipboard without injecting a keystroke for an app.
         pasteOverrides: [],
     },
     logging: {
@@ -61,8 +62,8 @@ const LIMITS = {
     'history.maxItemBytes': [1024, 16 * 1024 * 1024],
     'history.maxAgeDays': [0, 3650],
     'history.cleanupIntervalSec': [15, 864000],
-    'storage.textMaxBytes': [0, 1024 * 1024],
-    'storage.binaryMaxBytes': [0, 1024 * 1024],
+    'storage.textMaxBytes': [0, 15 * 1024 * 1024],
+    'storage.binaryMaxBytes': [0, 10 * 1024 * 1024],
     'storage.flushIntervalSec': [5, 3600],
     'ui.popupWidth': [240, 900],
     'ui.popupMaxHeight': [120, 1200],
@@ -72,6 +73,7 @@ const LIMITS = {
     'ui.popupOpacity': [0.1, 1],
     'ui.numberPickTimeoutMs': [100, 5000],
     'ui.autoPasteDelayMs': [0, 5000],
+    'ui.skipClipboardWriteForRecentTopSec': [0, 900],
 };
 
 const PASTE_COMBOS = new Set(['ctrl-v', 'ctrl-shift-v', 'shift-insert', 'none']);

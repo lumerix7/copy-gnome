@@ -11,7 +11,9 @@ File capture is not a special twin flow.
 1. If the source advertises `text/uri-list` or `x-special/gnome-copied-files`, read only the
    file URI list from that same queued source. Prefer `x-special/gnome-copied-files` when it
    is present so the first-line action (`copy` / `cut`) can be logged.
-2. Normalize it into newline-separated URI entries.
+2. Normalize it into newline-separated URI entries. Standard `file:///absolute/path` is kept
+   as-is; authority-less `file:/absolute/path` file URIs are accepted and stored as
+   `file:///absolute/path`.
 3. Add exactly one `kind=file` history record:
 
 ```json

@@ -51,8 +51,9 @@ function injectCombo(mods, key, combo, prefix) {
 }
 
 // Inject a named paste combo. Wayland has no semantic "paste", so the combo is
-// per-app; the clipboard is always set by the caller regardless, so a wrong/`none`
-// combo just means the user pastes manually. See docs/03-clipboard.md.
+// per-app. Restore normally prepares the clipboard first; the recent row-1 shortcut may
+// skip only that write while leaving paste injection unchanged.
+// See docs/03-clipboard.md.
 export function paste(combo, context = '[paste]') {
     const prefix = context ? `${context}: ` : '[paste]: ';
     switch (combo) {

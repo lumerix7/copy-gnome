@@ -143,6 +143,16 @@ copy-gnome doctor [--json] [--since DURATION]
 copy-gnome popup                            # open the history popup (same as the hotkey)
 ```
 
+Useful config examples:
+
+```bash
+copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
+copy-gnome config set ui.skipClipboardWriteForRecentTopSec 0  # disable row-1 write skip
+copy-gnome config set storage.textMaxBytes 1048576            # 1 MiB text cap
+copy-gnome config set storage.binaryMaxBytes 1048576          # 1 MiB raw image/binary cap
+```
+
+- Storage caps are still bounded by `history.maxItemBytes`.
 - Binary kinds: `get <id> --raw` decodes the clip's inline base64 data when available;
   `list` shows a label.
 - `--json` everywhere for scripting; default output is human-readable.

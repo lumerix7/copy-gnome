@@ -138,7 +138,7 @@ Images and binary:
 - This section only applies to non-file clipboard payloads, such as screenshot bitmap bytes
   or application-provided image data.
 - Store inline as base64 in `data` with `encoding:"base64"`.
-- Enforce `storage.binaryMaxBytes` on raw bytes before base64, default 16 KiB.
+- Enforce `storage.binaryMaxBytes` on raw bytes before base64, default 1 MiB.
 - Skip oversized binary/image payloads with a warning.
 - Image/binary capture is risky inside GNOME Shell; keep strict caps and disable it in
   config if instability returns.
@@ -250,9 +250,12 @@ The Shell extension itself should not watch old clips files and live-repair them
 
 ## Hard Caps
 
-- `storage.textMaxBytes`: text/HTML raw bytes, default around 64 KiB.
+- `storage.textMaxBytes`: text/HTML raw bytes, default 1 MiB, max 15 MiB.
 - `storage.binaryMaxBytes`: non-file image/binary raw bytes before base64, default
-  16 KiB.
+  1 MiB, max 10 MiB.
+- Effective per-kind retention is also bounded by `history.maxItemBytes`; use
+  `min(storage.textMaxBytes, history.maxItemBytes)` for text and
+  `min(storage.binaryMaxBytes, history.maxItemBytes)` for image/binary.
 - Snapshot lines have an internal 64 MiB hard cap. If a snapshot would exceed it, oldest
   entries are trimmed until it fits; actual retained count may be lower than `maxItems`.
 - `history.maxItems`: visible in-memory history cap, default 30, max 100.

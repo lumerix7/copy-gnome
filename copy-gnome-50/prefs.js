@@ -460,10 +460,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             title: 'Capture Caps',
             description: 'Oversized items are skipped instead of persisted.',
         });
-        capture.add(this._spinRow('textMaxBytes', 'Text payload cap (KiB)', 0, 1024, 1,
+        capture.add(this._spinRow('textMaxBytes', 'Text payload cap (KiB)', 0, 15360, 1,
             'storage', v => Math.round(v / 1024), v => Math.round(v) * 1024,
             'Text stored inside the JSONL snapshot; larger text is skipped.'));
-        capture.add(this._spinRow('binaryMaxBytes', 'Image/binary payload cap (KiB)', 0, 1024, 1,
+        capture.add(this._spinRow('binaryMaxBytes', 'Image/binary payload cap (KiB)', 0, 10240, 1,
             'storage', v => Math.round(v / 1024), v => Math.round(v) * 1024,
             'Non-file image/binary payload stored in JSONL; larger payloads are skipped.'));
         page.add(capture);
@@ -509,12 +509,16 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
 
         const beh = new Adw.PreferencesGroup({ title: 'Behavior' });
         const autoPasteRow = this._boolRow('autoPaste', 'Auto-paste after restore',
-            'After setting the clipboard, also inject the paste key (Ctrl+V, or the app-specific combo). Off = set the clipboard only.', 'ui');
+            'After restore, also inject the paste key (Ctrl+V, or the app-specific combo). Off = restore the clipboard only.', 'ui');
         const delayRow = this._spinRow('autoPasteDelayMs', 'Auto-paste delay (ms)', 0, 5000, 1,
             'ui', v => v, v => Math.round(v),
             'Delay before injecting the paste key after restoring the clipboard.');
+        const skipRecentTopRow = this._spinRow('skipClipboardWriteForRecentTopSec', 'Skip clipboard write for recent top (s)', 0, 900, 1,
+            'ui', v => v, v => Math.round(v),
+            'When row 1 was just updated, restore it without rewriting the system clipboard. 0 disables.');
         beh.add(autoPasteRow);
         beh.add(delayRow);
+        beh.add(skipRecentTopRow);
         beh.add(this._spinRow('numberPickTimeoutMs', 'Number-pick timeout (ms)', 100, 5000, 1,
             'ui', v => v, v => Math.round(v),
             'Wait time for multi-digit row numbers, such as 1 vs 11.'));
@@ -575,7 +579,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
                 'Your changes are written back to this config.yaml, so they take effect - but any hand-written comments or formatting in the YAML are removed on save.'));
 
         page.add(this._warningGroup('Image capture is risky inside GNOME Shell',
-            'It can destabilize the compositor. Turn it off on the General page if the session gets unstable. See WARNING.md.'));
+            'It can destabilize the compositor. Turn it off on the General page if the session gets unstable.'));
     }
 
     _readMetadataFile() {

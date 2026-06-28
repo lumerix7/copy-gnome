@@ -83,8 +83,8 @@ history:
 
 storage:
   backend: jsonl                    # jsonl | gda
-  textMaxBytes: 65536               # 64 KiB; larger text payloads are skipped
-  binaryMaxBytes: 16384             # 16 KiB; larger non-file image/binary payloads are skipped
+  textMaxBytes: 1048576             # 1 MiB default; max 15 MiB, also bounded by maxItemBytes
+  binaryMaxBytes: 1048576           # 1 MiB default; max 10 MiB raw, also bounded by maxItemBytes
   flushIntervalSec: 300             # append latest snapshot once per N seconds (the only writer)
 
 privacy:
@@ -102,10 +102,11 @@ ui:
   numberPickTimeoutMs: 500          # wait for multi-digit row numbers, e.g. 1 vs 11
   showThumbnails: false             # reserved; current popup uses text-only image previews
   autoPaste: true                   # ALSO inject the paste keystroke after restore.
-                                    # NOTE: restore always writes the system clipboard
-                                    # regardless; autoPaste only adds the paste keystroke.
   autoPasteDelayMs: 220             # delay before injecting paste after popup closes
   pasteRestoresFocus: true
+  skipClipboardWriteForRecentTopSec: 3
+                                    # 0 disables. If row 1 was updated within this many
+                                    # seconds, restore/paste it without rewriting clipboard.
   fileApps: ["org.gnome.nautilus"]  # lower-case wm_class substrings that receive file
                                     # records as text/uri-list; all others receive path text
   terminalApps: ["terminal"]        # lower-case wm_class substrings that paste with

@@ -19,8 +19,8 @@ export const DEFAULTS = {
   },
   storage: {
     backend: "jsonl",
-    textMaxBytes: 65536,
-    binaryMaxBytes: 16384,
+    textMaxBytes: 1024 * 1024,
+    binaryMaxBytes: 1024 * 1024,
     flushIntervalSec: 300,
   },
   privacy: {
@@ -38,6 +38,7 @@ export const DEFAULTS = {
     autoPaste: true,
     autoPasteDelayMs: 220,
     pasteRestoresFocus: true,
+    skipClipboardWriteForRecentTopSec: 3,
     fileApps: ["org.gnome.nautilus"],
     terminalApps: ["terminal"],
     pasteOverrides: [],
@@ -57,8 +58,8 @@ export const LIMITS = {
   "history.maxItemBytes": [1024, 16 * 1024 * 1024],
   "history.maxAgeDays": [0, 3650],
   "history.cleanupIntervalSec": [15, 864000],
-  "storage.textMaxBytes": [0, 1024 * 1024],
-  "storage.binaryMaxBytes": [0, 1024 * 1024],
+  "storage.textMaxBytes": [0, 15 * 1024 * 1024],
+  "storage.binaryMaxBytes": [0, 10 * 1024 * 1024],
   "storage.flushIntervalSec": [5, 3600],
   "ui.popupWidth": [240, 900],
   "ui.popupMaxHeight": [120, 1200],
@@ -68,6 +69,7 @@ export const LIMITS = {
   "ui.popupOpacity": [0.1, 1],
   "ui.numberPickTimeoutMs": [100, 5000],
   "ui.autoPasteDelayMs": [0, 5000],
+  "ui.skipClipboardWriteForRecentTopSec": [0, 900],
 };
 
 export const CONFIG_KEYS = [
@@ -95,6 +97,7 @@ export const CONFIG_KEYS = [
   "ui.autoPaste",
   "ui.autoPasteDelayMs",
   "ui.pasteRestoresFocus",
+  "ui.skipClipboardWriteForRecentTopSec",
   "ui.fileApps",
   "ui.terminalApps",
   "ui.pasteOverrides",

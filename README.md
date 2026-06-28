@@ -17,9 +17,10 @@ standalone clipboard managers can't monitor the clipboard).
   - first row pre-selected → `Enter` pastes the latest entry,
   - number keys paste rows by number, e.g. **1**, **11**; standalone **0** means row 10,
   - **Ctrl+F** focuses search; digits typed in search filter the list,
-  - `↑/↓` or mouse hover to select, **double-click** to paste,
-  - every paste writes the system clipboard, moves the entry to front, and (default)
-    injects Ctrl+V into the focused window.
+  - `↑/↓` or mouse hover to select, **single-click** to paste,
+  - every paste restores the entry, moves it to front, and (default) injects Ctrl+V
+    into the focused window; recent row-1 restores can skip only the system clipboard
+    rewrite for a short configured window.
 - Top-panel indicator: recent entries, open clipboard, clear.
 - Simple persistence: daily append-only `clips-YYYYMMDD.jsonl`; each line is a complete
   sorted history snapshot with bounded inline text, file URI references only for copied
