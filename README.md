@@ -78,8 +78,11 @@ journalctl --user -f | grep -i copy-gnome    # logs
 
 ## Layout
 
-- `copy-gnome-46/` - the GNOME 46 extension (live source for now).
-- `copy-gnome-50/` - placeholder for the future GNOME 50 build.
+- `copy-gnome-46/` - the GNOME 46 extension build.
+- `copy-gnome-50/` - the GNOME 50 extension build. Both are full, installable trees
+  maintained in parallel; they differ only in `metadata.json` (`shell-version`) and
+  `ui/popup.js` (GNOME 50 modal-grab and `orientation` fixes). `core/` is identical
+  across both - see [docs/09-multi-version.md](docs/09-multi-version.md).
 - `cli/` - Node CLI package (`copy-gnome`) for status, doctor, logs, config inspection,
   enable/disable, and JSONL repair.
 - `docs/` - full design (start at [docs/00-index.md](docs/00-index.md)).

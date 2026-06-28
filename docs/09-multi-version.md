@@ -1,48 +1,63 @@
 # 09 - Multi-version support (GNOME 46 & 50)
 
-## Recommendation: single source of truth, build per version
+## Two committed parallel trees
 
-The repo currently has empty `copy-gnome-46/` and `copy-gnome-50/` dirs. Maintaining two
-full hand-edited copies means every fix is done twice and they drift. Both 46 and 50 are
-**post-GNOME-45**, so they share the modern API: ESM `import`, the `Extension`/
-`ExtensionPreferences` base classes, `resource:///org/gnome/shell/...` imports. The
-differences between 46 and 50 are small and isolatable.
+The repo ships **two full, installable extension trees**, `copy-gnome-46/` and
+`copy-gnome-50/`, maintained in parallel by hand. `install.sh` picks the one matching the
+running Shell version (`copy-gnome-$VER`) and packs it directly - there is no build step,
+and both trees are committed source. `core/` is kept byte-identical across both; the only
+divergence is `metadata.json` (`shell-version`) and `ui/popup.js` (see below). Both 46 and
+50 are **post-GNOME-45**, so they share the modern API: ESM `import`, the `Extension`/
+`ExtensionPreferences` base classes, `resource:///org/gnome/shell/...` imports.
 
-**Design: one `src/` tree + a build script that emits the two packaged dirs.**
-
-```
-src/                      # the only place you edit code
-scripts/build.sh          # stamps metadata.json shell-version, runs compat transform,
-                          # compiles schemas, outputs to copy-gnome-46/ & copy-gnome-50/
-copy-gnome-46/            # BUILD OUTPUT (installable extension for Shell 46)
-copy-gnome-50/            # BUILD OUTPUT (installable extension for Shell 50)
-```
-
-`copy-gnome-46/` and `copy-gnome-50/` become **generated artifacts** (gitignore or
-commit them, your call - committing makes "install without building" possible).
+Changing shared code means editing both trees. A missed sync is caught mechanically by
+`scripts/check-sync.sh`, a repo-level check that is **not** part of the standalone CLI
+package: it asserts the two trees differ only on `metadata.json` and `ui/popup.js`. It runs
+as part of `./scripts/install-cli.sh`; run it directly to check without installing.
 
 ## What actually differs between 46 and 50
 
-Keep all version-specific code behind a thin shim so `src/` stays clean:
+The two trees are kept in sync; today only two files diverge:
 
-```
-src/compat/
-  index.js        # detects Shell version (Config.PACKAGE_VERSION), re-exports shims
-  v46.js
-  v50.js
-```
+- `metadata.json` → `shell-version`: `["46"]` vs `["50"]`.
+- `ui/popup.js` → GNOME 50 needs two fixes that 46 does not:
+  - GNOME 48 deprecated the St widget `vertical` property; 50 uses
+    `orientation: Clutter.Orientation.VERTICAL` instead.
+  - GNOME 50's `Clutter.grab()` modal routes crossing (enter/leave) events to the grabbed
+    backdrop, so descendant `St.Button`s never flip `hover` true and never emit `clicked`.
+    50 drives the Clear button and the row buttons off `button-press-event` instead.
+- `core/` is byte-identical across both; `prefs.js`, `ui/indicator.js`,
+  `stylesheet.css`, `schemas/`, and `vendor/` are currently identical too.
 
-Likely divergence points to watch (verify against release notes when 50 ships):
+Other points to watch if a future GNOME diverges further (verify against release notes):
 
-- `metadata.json` → `shell-version`: `["46"]` vs `["50"]` (stamped by build).
-- Occasional moves/renames of `resource:///` modules between releases.
+- Moves/renames of `resource:///` modules between releases.
 - Adwaita/GTK widget deprecations in `prefs.js` across versions.
-- Any `MetaSelection` / `Clutter` virtual-device signature drift.
+- `MetaSelection` / `Clutter` virtual-device signature drift.
 
-If a future GNOME makes a **breaking** change that can't be hidden behind a shim, add
-`src/compat/vNN.js` rather than forking the whole tree.
+Today the two trees just carry the version-specific lines inline. If a future GNOME makes a
+**breaking** change too large for inline differences, that is the point to reconsider a
+`src/compat/` shim (and the single-source build it implies) rather than forking the tree
+further.
 
-## metadata.json (template, stamped at build)
+## Why not a single source + build script
+
+A single `src/` tree with a `scripts/build.sh` that emits both dirs would let each fix be
+made once. It is deliberately **not** done here:
+
+- The version-specific bits in `popup.js` are real branched code (a property rename plus a
+  different input signal), not a value to stamp. A build would need a `src/compat/` shim
+  with runtime version detection, adding its own bug surface.
+- GNOME extensions have no standard build tooling; a hand-rolled build is net-new
+  maintenance for a small project.
+- `install.sh` consumes the committed trees directly. A build would either force a build
+  step before every install, or sit on top of committed outputs as a release-only ritual.
+
+Two committed trees plus the drift check above get the safety at a fraction of the cost.
+Revisit only if a **third** Shell version lands (three-way sync gets tedious) or the
+version-specific surface grows too large to keep inline.
+
+## metadata.json
 
 ```json
 {
@@ -55,7 +70,8 @@ If a future GNOME makes a **breaking** change that can't be hidden behind a shim
 }
 ```
 
-> Note: a single artifact could list `"shell-version": ["46","50"]`, but keeping
-> separate per-version outputs (as the repo is set up) lets each pin exactly one Shell
-> and ship version-specific shims without runtime branching cost. We keep the two output
-> dirs and one source tree.
+The only field that differs between the two trees is `shell-version` (`["46"]` vs `["50"]`).
+
+> Note: a single artifact could list `"shell-version": ["46","50"]`, but keeping separate
+> per-version outputs lets each pin exactly one Shell and ship version-specific fixes
+> without runtime branching cost. We keep the two output dirs, hand-maintained.
