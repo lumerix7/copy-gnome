@@ -1,12 +1,12 @@
 import { CONFIG_KEYS } from "./config.js";
 
-const GLOBAL_OPTIONS = [
+export const GLOBAL_OPTIONS = [
   "-V", "--version",
   "-h", "--help",
   "--completion",
 ];
 
-const COMMANDS = [
+export const COMMANDS = [
   {
     name: "status",
     options: ["--json", "-h", "--help"],

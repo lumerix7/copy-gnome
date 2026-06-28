@@ -212,7 +212,10 @@ Offline checks, always available:
 - Detect session type from `$XDG_SESSION_TYPE`; warn that Wayland requires logout/login
   after JS changes and cannot use `Alt+F2`, `r` restart.
 - Verify the extension install directory exists and contains `metadata.json`,
-  `extension.js`, `schemas/gschemas.compiled`, `core/`, and `ui/`.
+  `extension.js`, `schemas/gschemas.compiled`, `core/`, `ui/`, and `vendor/`
+  (implemented as the `extension.files` check; a missing required file is `fail`).
+- Warn when the `toggle-popup` keybinding is empty (`@as []`), since the popup
+  cannot be opened without one (implemented as part of `gsettings.toggle-popup`).
 - Run `gnome-extensions info copy-gnome@clipboard` and parse enabled/state/path/version.
 - Verify `COPY_GNOME_HOME` if set; otherwise check whether `/opt/copy-gnome` exists and is
   usable, and report the expected fallback to `$XDG_DATA_HOME/copy-gnome` if not.
@@ -223,7 +226,7 @@ Offline checks, always available:
   `copy-gnome`, `JS ERROR`, `signal 11`, `popup show failed`, `modal release failed`,
   `clipboard read failed`, `Xwayland exited unexpectedly`.
 - Check common keybinding hazards with `gsettings`, especially `org.gnome.settings-daemon.plugins.media-keys logout`,
-  screenshot shortcuts, and the extension's `toggle-popup` keys.
+  screenshot shortcuts, and the extension's `toggle-popup` keys (planned; only the empty-keybinding case above is implemented yet).
 
 Online checks, only when the extension service is reachable:
 

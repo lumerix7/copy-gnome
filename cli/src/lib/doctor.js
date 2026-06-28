@@ -6,8 +6,8 @@ import { collectLogs } from "./logs.js";
 import { canWriteDir } from "./paths.js";
 import { collectStatus } from "./status.js";
 
-export function runDoctor(opts = {}) {
-  const status = collectStatus();
+export function runDoctor(opts = {}, sources = {}) {
+  const status = sources.status ?? collectStatus();
   const checks = [];
 
   add(checks, "system.node", "ok", `Node ${status.node}`);
@@ -25,6 +25,11 @@ export function runDoctor(opts = {}) {
 
   add(checks, "extension.installed", status.extension.installed ? "ok" : "fail",
     status.extension.installed ? `Installed at ${status.extension.dir}` : `Missing install dir: ${status.extension.dir}`);
+  if (status.extension.installed) {
+    const missing = missingExtensionFiles(status.extension.dir);
+    add(checks, "extension.files", missing.length ? "fail" : "ok",
+      missing.length ? `Install dir incomplete; missing: ${missing.join(", ")}` : "Install dir has all required files");
+  }
   add(checks, "extension.info", status.extension.infoOk ? "ok" : "warn",
     status.extension.infoOk
       ? extensionSummary(status)
@@ -40,8 +45,14 @@ export function runDoctor(opts = {}) {
     add(checks, "extension.active", active ? "ok" : "warn",
       `State: ${status.extension.info?.state || "unknown"}${enabled ? "" : " (may be disabled)"}`);
 
-  add(checks, "gsettings.toggle-popup", status.gsettings.ok ? "ok" : "warn",
-    status.gsettings.ok ? `toggle-popup: ${status.gsettings.togglePopup}` : status.gsettings.error);
+  const bindingEmpty = status.gsettings.ok && !hasKeybinding(status.gsettings.togglePopup);
+  add(checks, "gsettings.toggle-popup",
+    !status.gsettings.ok || bindingEmpty ? "warn" : "ok",
+    !status.gsettings.ok
+      ? status.gsettings.error
+      : bindingEmpty
+        ? `toggle-popup keybinding is empty; popup cannot be opened (${status.gsettings.togglePopup})`
+        : `toggle-popup: ${status.gsettings.togglePopup}`);
 
   add(checks, "paths.data-home", status.paths.usedFallback ? "warn" : "ok",
     status.paths.usedFallback
@@ -69,7 +80,7 @@ export function runDoctor(opts = {}) {
   add(checks, "clips.latest", status.clips.ok ? "ok" : "fail",
     status.clips.file ? `${status.clips.message}: ${status.clips.file}` : status.clips.message);
 
-  const logs = collectLogs({ since: opts.since || "30m" });
+  const logs = sources.logs ?? collectLogs({ since: opts.since || "30m" });
   if (!logs.ok) {
     add(checks, "logs.read", "warn", logs.error);
   } else {
@@ -108,4 +119,31 @@ function shellDiscoveryHint(status) {
   if (status.session === "wayland")
     return `${base}; installed files exist, but current GNOME Shell may need logout/login to discover local extension installs`;
   return `${base}; installed files exist, but current GNOME Shell does not list the extension`;
+}
+
+// Files/dirs the extension needs to load at all. A half-installed or corrupted
+// install (e.g. missing extension.js or gschemas.compiled) is a real failure mode
+// that should fail `doctor` even when gnome-extensions info still reports ACTIVE.
+const REQUIRED_EXTENSION_FILES = [
+  "metadata.json",
+  "extension.js",
+  "core",
+  "ui",
+  "vendor",
+  "schemas/gschemas.compiled",
+];
+
+function missingExtensionFiles(dir) {
+  const missing = [];
+  for (const name of REQUIRED_EXTENSION_FILES)
+    if (!fs.existsSync(path.join(dir, name)))
+      missing.push(name);
+  return missing;
+}
+
+// gsettings stores an empty string array as "@as []"; treat that (and "[]"/blank)
+// as "no keybinding", since the popup cannot be opened without one.
+function hasKeybinding(raw) {
+  const s = raw == null ? "" : String(raw).trim();
+  return s !== "" && s !== "@as []" && s !== "[]";
 }

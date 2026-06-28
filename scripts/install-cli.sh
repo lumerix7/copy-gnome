@@ -87,6 +87,9 @@ npm install
 echo "running CLI checks"
 npm run check
 
+echo "running CLI tests"
+npm test
+
 echo "running multi-version tree sync check"
 bash "$REPO_ROOT/scripts/check-sync.sh"
 

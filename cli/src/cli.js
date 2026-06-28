@@ -33,6 +33,13 @@ export async function main(argv) {
     return;
   }
 
+  const program = buildProgram();
+  await program.parseAsync(argv);
+}
+
+// Build the commander program without parsing, so tests can inspect the real
+// command/option surface and assert bash completion stays in sync with it.
+export function buildProgram() {
   const program = new Command();
   program
     .name("copy-gnome")
@@ -259,7 +266,7 @@ export async function main(argv) {
     });
 
   applyHelpFormat(program);
-  await program.parseAsync(argv);
+  return program;
 }
 
 function applyHelpFormat(cmd) {

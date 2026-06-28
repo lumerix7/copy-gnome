@@ -8,12 +8,18 @@
   "bin": {
     "copy-gnome": "./bin/copy-gnome.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "scripts"
+  ],
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "start": "node ./bin/copy-gnome.js",
     "check": "node ./scripts/check.mjs",
+    "test": "node --test",
     "doctor": "node ./bin/copy-gnome.js doctor"
   },
   "dependencies": {
