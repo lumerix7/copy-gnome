@@ -188,7 +188,8 @@ flowchart TD
 ## File copies
 
 File-copy handling is intentionally simple: capture one `kind=file` record from
-`text/uri-list`; restore later chooses `text/uri-list` or decoded path text by target app.
+`text/uri-list`; restore later chooses GNOME's file-copy MIME or decoded path text by
+target app.
 Keep that policy out of the generic queue/drop model; see
 [file-twin-design](file-twin-design.md).
 

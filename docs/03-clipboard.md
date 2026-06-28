@@ -61,7 +61,7 @@ entry.
 File capture creates exactly one **file** entry from `text/uri-list`/`x-special`. It does
 not wait for, synthesize, or promote a separate `text/plain` path entry. The file entry keeps
 the URI-list reference only; when the user restores it, the target app config decides whether
-to write `text/uri-list` or decoded path text.
+to write GNOME's file-copy MIME (`x-special/gnome-copied-files`) or decoded path text.
 
 URI-list input accepts both standard `file:///absolute/path` and authority-less
 `file:/absolute/path` file URIs; copy-gnome stores and restores URI-list output as
@@ -99,12 +99,11 @@ const cb = St.Clipboard.get_default();
 cb.set_content(St.ClipboardType.CLIPBOARD, mimetype, bytes);   // or set_text() for plain text
 ```
 
-For file entries, the current build sets **`text/uri-list` only** (Nautilus and many file
-managers accept it for a paste). Offering `x-special/gnome-copied-files` (the
-`copy\n<uri>` payload) and `text/plain` *together* - so every file manager pastes the file
-and editors paste the path from the same entry - requires a multi-mime
-`Meta.SelectionSource` (`St.Clipboard.set_content` sets only one mime and replaces on each
-call). That is a planned enhancement, not yet implemented.
+For file entries, file-target apps receive **`x-special/gnome-copied-files`** with a
+non-destructive `copy\n<uri-list>` payload. Other apps receive decoded `text/plain` path
+text. Offering `x-special/gnome-copied-files`, `text/uri-list`, and `text/plain` together
+requires a multi-mime `Meta.SelectionSource` (`St.Clipboard.set_content` sets only one mime
+and replaces on each call). That remains a planned enhancement.
 
 
 ### Recent top restore shortcut

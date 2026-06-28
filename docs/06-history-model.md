@@ -99,7 +99,7 @@ These fields are not persisted:
 | kind     | payload field | encoding | restore behavior |
 |----------|---------------|----------|------------------|
 | `text`   | `text`        | `utf8`   | `Clipboard.setText(text)` |
-| `file`   | `uri`         | `uri`    | `Clipboard.setContent('text/uri-list', uri bytes)` |
+| `file`   | `uri`         | `uri`    | file targets receive `Clipboard.setContent('x-special/gnome-copied-files', copy + uri bytes)`; other targets receive path text |
 | `image`  | `data`        | `base64` | base64 decode, then `Clipboard.setContent(mime, bytes)` |
 | `binary` | `data`        | `base64` | base64 decode, then `Clipboard.setContent(mime, bytes)` |
 | `html`   | `text`        | `utf8`   | loader accepts it; current capture path stores plain text |

@@ -39,11 +39,12 @@ non-destructive file-reference paste.
 Restore writes exactly one clipboard MIME for a file record:
 
 - if the focused/target window has a `wm_class`, lower-case it and match by substring
-  against lower-cased `ui.fileApps`; matches write `text/uri-list`
+  against lower-cased `ui.fileApps`; matches write `x-special/gnome-copied-files` with
+  `copy\n<uri-list>`
 - otherwise, decode the URI list to path text and write `text/plain`
 
-`ui.fileApps` defaults to `["org.gnome.nautilus"]`, so Nautilus receives `text/uri-list`;
-other apps receive path text unless the user opts them into file-target behavior.
+`ui.fileApps` defaults to `["org.gnome.nautilus"]`, so Nautilus receives the GNOME file-copy
+MIME; other apps receive path text unless the user opts them into file-target behavior.
 
 
 ## Memory sources

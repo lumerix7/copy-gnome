@@ -56,6 +56,10 @@ function uriListCount(uriList) {
     return uriList.split('\n').filter(Boolean).length;
 }
 
+function gnomeCopiedFilesPayload(uriList) {
+    return `copy\n${uriList}`;
+}
+
 function fileUriPath(uri) {
     if (uri.startsWith('file://'))
         return uri.replace(/^file:\/\//, '');
@@ -478,8 +482,9 @@ export default class CopyGnomeExtension extends Extension {
                         wrote = true;
                     else {
                         markSelfWrite('file', restoreUri);
-                        wrote = Clipboard.setContent('text/uri-list', encodeUtf8(restoreUri));
-                        log.debug(`[restore]: file clipboard write mode=file recordId=${rec.id} uriCount=${uriListCount(restoreUri)} uriList="${debugValue(restoreUri)}"`);
+                        const payload = gnomeCopiedFilesPayload(restoreUri);
+                        wrote = Clipboard.setContent('x-special/gnome-copied-files', encodeUtf8(payload));
+                        log.debug(`[restore]: file clipboard write mode=file mime=x-special/gnome-copied-files action=copy recordId=${rec.id} uriCount=${uriListCount(restoreUri)} uriList="${debugValue(restoreUri)}"`);
                     }
                 } else {
                     const pathText = filePathText(restoreUri);
