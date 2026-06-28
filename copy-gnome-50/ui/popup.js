@@ -10,9 +10,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { log } from '../core/log.js';
 
 // Modal, searchable history list. See docs/07-ui.md. The grabbed actor is a full-monitor
-// backdrop (so clicks outside the panel dismiss it); the panel is centered on the active
-// monitor. Near-caret anchoring was removed because GNOME/Wayland caret reporting is not
-// reliable across apps or repeated modal grabs.
+// backdrop (so clicks outside the panel dismiss it); the panel itself is reactive so blank
+// space inside the popup does not fall through as an outside click. The panel is centered on
+// the active monitor. Near-caret anchoring was removed because GNOME/Wayland caret reporting
+// is not reliable across apps or repeated modal grabs.
 
 // Always-visible keyboard/mouse cheat sheet shown under the search box. Short, English +
 // symbols. Number-pick feedback temporarily replaces it and restores it when cleared.
@@ -71,6 +72,45 @@ function num(v, fallback, min = -Infinity, max = Infinity) {
     if (typeof v !== 'number' || Number.isNaN(v))
         return fallback;
     return clamp(v, min, max);
+}
+
+function eventCoords(event) {
+    try {
+        return event.get_coords();
+    } catch (e) {
+        log.debug(`event coordinates unavailable: ${e.message}`);
+        return null;
+    }
+}
+
+function eventInsideActor(actor, event) {
+    if (!actor)
+        return false;
+    const coords = eventCoords(event);
+    if (!coords)
+        return false;
+    try {
+        const [x, y] = coords;
+        const [actorX, actorY] = actor.get_transformed_position();
+        const [actorW, actorH] = actor.get_transformed_size();
+        return x >= actorX && x <= actorX + actorW &&
+            y >= actorY && y <= actorY + actorH;
+    } catch (e) {
+        log.debug(`actor hit test failed: ${e.message}`);
+        return false;
+    }
+}
+
+function setMoveCursor(actor) {
+    if (!actor?.set_cursor || !Clutter.Cursor)
+        return;
+    try {
+        const cursor = Clutter.Cursor.MOVE ?? Clutter.Cursor.DND_MOVE ?? Clutter.Cursor.POINTING_HAND;
+        if (cursor !== undefined)
+            actor.set_cursor(cursor);
+    } catch (e) {
+        log.debug(`move cursor unavailable: ${e.message}`);
+    }
 }
 
 function uiDefaults(ui) {
@@ -192,6 +232,7 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._dragHandle = null;
         this._grab = null;
         this._rows = [];        // [{rec, button}]
         this._selected = -1;
@@ -204,6 +245,8 @@ export class Popup {
         this._clearArmed = false;
         this._clearConfirmTimer = 0;
         this._saveHintTimer = 0;
+        this._drag = null;
+        this._moveBounds = null;
     }
 
     get visible() { return this._visible; }
@@ -211,7 +254,7 @@ export class Popup {
     // opts: { placement: 'center'|'panel', anchorActor }. The ONLY difference between the
     // two callers is placement; both share the same translucent styling and all logic.
     toggle(targetWindow = null, opts = {}) {
-        if (this._visible) this.hide();
+        if (this._visible) this.hide('toggle');
         else this.show(targetWindow, opts);
     }
 
@@ -223,6 +266,7 @@ export class Popup {
         this._targetWindow = targetWindow ??
             global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
         const placement = opts.placement === 'panel' ? 'panel' : 'center';
+        const movable = placement === 'center';
         const anchorActor = opts.anchorActor ?? null;
         this._anchorActor = anchorActor;
         const ui = uiDefaults(this._getUi());
@@ -263,10 +307,31 @@ export class Popup {
         this._panel = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
             style_class: `cg-popup cg-popup-${theme.resolved}`,
+            reactive: true,
             width,
         });
         this._panel.opacity = Math.round(opacity * 255);
         this._backdrop.add_child(this._panel);
+
+        if (movable) {
+            this._dragHandle = new St.Widget({
+                style_class: 'cg-drag-handle',
+                reactive: true,
+                can_focus: false,
+                x_expand: true,
+                x_align: Clutter.ActorAlign.CENTER,
+                width: 80,
+                height: 7,
+            });
+            this._dragHandle.connect('button-press-event',
+                (_a, event) => this._startDrag(event));
+            this._dragHandle.connect('motion-event',
+                (_a, event) => this._updateDrag(event));
+            this._dragHandle.connect('button-release-event',
+                (_a, event) => this._finishDrag(event));
+            setMoveCursor(this._dragHandle);
+            this._panel.add_child(this._dragHandle);
+        }
 
         this._entry = new St.Entry({
             style_class: 'cg-search',
@@ -329,6 +394,14 @@ export class Popup {
             (_a, event) => this._onKey(event));
         this._backdrop.connect('button-press-event',
             (_a, event) => this._onBackdropPress(event));
+        this._backdrop.connect('motion-event',
+            (_a, event) => this._updateDrag(event));
+        this._backdrop.connect('button-release-event',
+            (_a, event) => this._finishDrag(event));
+        this._panel.connect('motion-event',
+            (_a, event) => this._updateDrag(event));
+        this._panel.connect('button-release-event',
+            (_a, event) => this._finishDrag(event));
 
         this._rebuild();
 
@@ -347,6 +420,14 @@ export class Popup {
 
         let lx = gx - monitor.x;
         let ly = gy - monitor.y;
+        this._moveBounds = movable
+            ? {
+                minX: edgeMargin,
+                maxX: monitor.width - width - edgeMargin,
+                minY: edgeMargin,
+                maxY: monitor.height - natH - edgeMargin,
+            }
+            : null;
         lx = clamp(lx, edgeMargin, monitor.width - width - edgeMargin);
         ly = clamp(ly, edgeMargin, monitor.height - natH - edgeMargin);
         this._panel.set_position(Math.round(lx), Math.round(ly));
@@ -354,11 +435,12 @@ export class Popup {
         this._grab = Main.pushModal(this._backdrop, { actionMode: Shell.ActionMode.POPUP });
         if (!this._grab) {
             log.warn('failed to grab input for popup');
-            this.hide();
+            this.hide('grab-failed');
             return;
         }
         modalPushed = true;
         this._visible = true;
+        log.debug(`[popup]: show placement=${placement} movable=${movable ? 'yes' : 'no'} position=${Math.round(lx)},${Math.round(ly)} size=${width}x${Math.round(natH)}`);
         global.stage.set_key_focus(this._backdrop);
         } catch (e) {
             log.warn(`popup show failed: ${e.message}`);
@@ -366,7 +448,9 @@ export class Popup {
         }
     }
 
-    hide() {
+    hide(reason = 'programmatic') {
+        if (this._visible || this._backdrop)
+            log.debug(`[popup]: hide reason=${reason}`);
         this._clearNumberPick();
         this._disarmClear();
         this._clearSaveHint();
@@ -391,11 +475,14 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._dragHandle = null;
         this._rows = [];
         this._selected = -1;
         this._targetWindow = null;
         this._anchorActor = null;
         this._clearBtn = null;
+        this._drag = null;
+        this._moveBounds = null;
         this._visible = false;
     }
 
@@ -424,12 +511,78 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._dragHandle = null;
         this._rows = [];
         this._selected = -1;
         this._targetWindow = null;
         this._anchorActor = null;
         this._clearBtn = null;
+        this._drag = null;
+        this._moveBounds = null;
         this._visible = false;
+    }
+
+    _setDragTranslation(x, y) {
+        if (!this._panel || !this._moveBounds)
+            return;
+        const b = this._moveBounds;
+        const nextX = Math.round(clamp(x, b.minX, b.maxX));
+        const nextY = Math.round(clamp(y, b.minY, b.maxY));
+        this._panel.translation_x = nextX - this._drag.panelX;
+        this._panel.translation_y = nextY - this._drag.panelY;
+    }
+
+    _commitDragPosition() {
+        if (!this._panel || !this._drag)
+            return null;
+        const x = Math.round(this._drag.panelX + (this._panel.translation_x ?? 0));
+        const y = Math.round(this._drag.panelY + (this._panel.translation_y ?? 0));
+        this._panel.translation_x = 0;
+        this._panel.translation_y = 0;
+        this._panel.set_position(x, y);
+        return [x, y];
+    }
+
+    _startDrag(event) {
+        if (!this._panel || !this._moveBounds)
+            return Clutter.EVENT_PROPAGATE;
+        const coords = eventCoords(event);
+        if (!coords)
+            return Clutter.EVENT_STOP;
+        const [stageX, stageY] = coords;
+        const [panelX, panelY] = this._panel.get_position();
+        this._panel.translation_x = 0;
+        this._panel.translation_y = 0;
+        this._panel.add_style_class_name('cg-popup-dragging');
+        this._drag = { stageX, stageY, panelX, panelY };
+        return Clutter.EVENT_STOP;
+    }
+
+    _updateDrag(event) {
+        if (!this._drag)
+            return Clutter.EVENT_PROPAGATE;
+        const coords = eventCoords(event);
+        if (!coords)
+            return Clutter.EVENT_STOP;
+        const [stageX, stageY] = coords;
+        this._setDragTranslation(
+            this._drag.panelX + stageX - this._drag.stageX,
+            this._drag.panelY + stageY - this._drag.stageY);
+        return Clutter.EVENT_STOP;
+    }
+
+    _finishDrag(event) {
+        if (!this._drag)
+            return Clutter.EVENT_PROPAGATE;
+        this._updateDrag(event);
+        const position = this._commitDragPosition();
+        this._panel?.remove_style_class_name('cg-popup-dragging');
+        this._drag = null;
+        if (position) {
+            const [x, y] = position;
+            log.debug(`[popup]: drag end position=${Math.round(x)},${Math.round(y)}`);
+        }
+        return Clutter.EVENT_STOP;
     }
 
     _onClearClicked() {
@@ -587,7 +740,7 @@ export class Popup {
 
     _activate(rec) {
         const targetWindow = this._targetWindow;
-        this.hide();
+        this.hide('activate');
         this._onActivate(rec, targetWindow);
     }
 
@@ -797,7 +950,7 @@ export class Popup {
         switch (sym) {
             case Clutter.KEY_Escape:
                 this._clearNumberPick();
-                this.hide();
+                this.hide('escape');
                 return Clutter.EVENT_STOP;
             case Clutter.KEY_Down:
                 this._clearNumberPick();
@@ -823,10 +976,11 @@ export class Popup {
 
     _onBackdropPress(event) {
         const source = event.get_source();
-        if (!actorContains(this._panel, source)) {
-            this.hide();
+        if (actorContains(this._panel, source))
+            return Clutter.EVENT_PROPAGATE;
+        if (eventInsideActor(this._panel, event))
             return Clutter.EVENT_STOP;
-        }
-        return Clutter.EVENT_PROPAGATE;
+        this.hide('outside');
+        return Clutter.EVENT_STOP;
     }
 }

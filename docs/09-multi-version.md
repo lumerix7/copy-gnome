@@ -3,9 +3,10 @@
 ## Two committed parallel trees
 
 The repo ships **two full, installable extension trees**, `copy-gnome-46/` and
-`copy-gnome-50/`, maintained in parallel by hand. `install.sh` picks the one matching the
-running Shell version (`copy-gnome-$VER`) and packs it directly - there is no build step,
-and both trees are committed source. `core/` is kept byte-identical across both; the only
+`copy-gnome-50/`, maintained in parallel by hand. `install-extension.sh` picks the one
+matching the running Shell version (`copy-gnome-$VER`) and packs it directly - there is no
+build step, and both trees are committed source. `core/` is kept byte-identical across
+both; the only
 divergence is `metadata.json` (`shell-version`) and `ui/popup.js` (see below). Both 46 and
 50 are **post-GNOME-45**, so they share the modern API: ESM `import`, the `Extension`/
 `ExtensionPreferences` base classes, `resource:///org/gnome/shell/...` imports.
@@ -50,7 +51,7 @@ made once. It is deliberately **not** done here:
   with runtime version detection, adding its own bug surface.
 - GNOME extensions have no standard build tooling; a hand-rolled build is net-new
   maintenance for a small project.
-- `install.sh` consumes the committed trees directly. A build would either force a build
+- `install-extension.sh` consumes the committed trees directly. A build would either force a build
   step before every install, or sit on top of committed outputs as a release-only ritual.
 
 Two committed trees plus the drift check above get the safety at a fraction of the cost.

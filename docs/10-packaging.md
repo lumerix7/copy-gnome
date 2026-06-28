@@ -26,10 +26,11 @@ gnome-extensions pack copy-gnome-46 \
   --force -o dist/
 ```
 
-## Install (`scripts/install.sh`)
+## Install (`scripts/install-extension.sh`)
 
 Detect the running Shell version, pick the matching dir, pack it, and install the
-bundle with GNOME's standard extension CLI:
+bundle with GNOME's standard extension CLI. Use `--gnome 46` or `--gnome 50` to force a
+specific committed tree:
 
 ```sh
 VER=$(gnome-shell --version | grep -oE '[0-9]+' | head -1)   # e.g. 46
@@ -105,7 +106,7 @@ sudo install -d -m 1777 /opt/copy-gnome          # sticky like /tmp: each user o
 | Script | Purpose |
 |--------|---------|
 | `build.sh` | src → copy-gnome-46/50, stamp, compile schemas, pack |
-| `install.sh` | detect version, pack with `gnome-extensions`, install bundle; relogin before enable on Wayland |
+| `install-extension.sh` | detect or select version, pack with `gnome-extensions`, install bundle; relogin before enable on Wayland |
 | `setup-home.sh` | one-time `sudo` creation of `/opt/copy-gnome` |
 | `dev-nested.sh` | launch nested Wayland Shell for testing |
 | `uninstall.sh` | disable + remove install dir (leaves data unless `--purge`) |

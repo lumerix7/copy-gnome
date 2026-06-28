@@ -6,6 +6,7 @@
 
 .cg-popup {
     font-family: monospace;
+    font-size: 0.95em;
     border-radius: 12px;
     padding: 8px;
     spacing: 6px;
@@ -23,6 +24,21 @@
     color: #242426;
     border: 1px solid rgba(0, 0, 0, 0.16);
     box-shadow: 0 4px 18px 2px rgba(0, 0, 0, 0.22);
+}
+
+.cg-popup-dragging {
+    box-shadow: none;
+}
+
+.cg-drag-handle {
+    height: 7px;
+    border-radius: 3px;
+    margin-bottom: 2px;
+    background-color: rgba(255, 255, 255, 0.20);
+}
+
+.cg-popup-light .cg-drag-handle {
+    background-color: rgba(0, 0, 0, 0.20);
 }
 
 .cg-search {
@@ -96,7 +112,7 @@
 /* Set the font explicitly on the preview too: a reconfigured clutter_text (single-line +
    ellipsize) does not reliably inherit .cg-popup's font-family. */
 .cg-preview {
-    font-family: "Noto Sans Mono CJK SC", "Liberation Mono", "DejaVu Sans Mono", monospace;
+    font-family: monospace;
 }
 
 .cg-num {

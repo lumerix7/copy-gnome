@@ -1,29 +1,45 @@
 #!/usr/bin/env bash
-# Install copy-gnome for the running GNOME Shell version.
+# Install copy-gnome for a GNOME Shell version.
 # Local install only (not published). Log out / back in afterwards on Wayland.
 set -euo pipefail
 
 UUID="copy-gnome@clipboard"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 YES=0
+VER=""
 
 usage() {
   cat <<EOF
 Usage: $0 [OPTIONS]
 
-Install copy-gnome for the running GNOME Shell version.
+Install copy-gnome for a GNOME Shell version.
 
 Options:
-  -y, --yes     Execute after showing the preview, without prompting
-  -h, --help    Show this help
+  --gnome VERSION  Use copy-gnome-VERSION instead of detecting the running shell
+  -y, --yes        Execute after showing the preview, without prompting
+  -h, --help       Show this help
 
 Without --yes, the script shows a preview and asks before installing/replacing
 the local extension bundle.
 EOF
 }
 
+format_command_args() {
+  local formatted=""
+  local arg
+  for arg in "$@"; do
+    formatted+=" $(printf '%q' "$arg")"
+  done
+  printf '%s' "$formatted"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --gnome)
+      [[ $# -ge 2 ]] || { echo "--gnome requires a version" >&2; exit 2; }
+      VER="$2"
+      shift 2
+      ;;
     -y|--yes)
       YES=1
       shift
@@ -40,8 +56,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-VER="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
-[[ -z "$VER" ]] && { echo "could not detect GNOME Shell version" >&2; exit 1; }
+if [[ -z "$VER" ]]; then
+  VER="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+  [[ -z "$VER" ]] && { echo "could not detect GNOME Shell version" >&2; exit 1; }
+fi
+
+if [[ ! "$VER" =~ ^[0-9]+$ ]]; then
+  echo "invalid GNOME Shell version: $VER" >&2
+  exit 2
+fi
+
+command -v gnome-extensions >/dev/null 2>&1 || {
+  echo "gnome-extensions command not found" >&2
+  exit 1
+}
+
+INSTALL_ARGS=(install --force)
+install_help="$(gnome-extensions install --help 2>&1 || true)"
+if grep -q -- "--print-uuid" <<<"$install_help"; then
+  INSTALL_ARGS+=(--print-uuid)
+fi
+INSTALL_DISPLAY_ARGS="$(format_command_args "${INSTALL_ARGS[@]}")"
 
 SRC="$REPO_ROOT/copy-gnome-$VER"
 if [[ ! -d "$SRC" ]]; then
@@ -74,7 +109,7 @@ Steps:
        --schema=schemas/org.gnome.shell.extensions.copy-gnome.gschema.xml \\
        --force \\
        --out-dir="$PACK_DIR"
-  2. gnome-extensions install --force --print-uuid "$BUNDLE"
+  2. gnome-extensions$INSTALL_DISPLAY_ARGS "$BUNDLE"
   3. gnome-extensions enable "$UUID"   # after logout/login on Wayland
 
 Note: this script performs steps 1 and 2. Do not reload GNOME Shell in place on Wayland;
@@ -114,9 +149,10 @@ if [[ ! -f "$BUNDLE" ]]; then
   exit 1
 fi
 
-echo "installing bundle with gnome-extensions install --force"
-installed_uuid="$(gnome-extensions install --force --print-uuid "$BUNDLE")"
-if [[ "$installed_uuid" != "$UUID" ]]; then
+echo "installing bundle with gnome-extensions$INSTALL_DISPLAY_ARGS"
+install_output="$(gnome-extensions "${INSTALL_ARGS[@]}" "$BUNDLE")"
+installed_uuid="$(printf '%s\n' "$install_output" | tail -n 1)"
+if [[ -n "$installed_uuid" && "$installed_uuid" != "$UUID" ]]; then
   echo "installed unexpected extension UUID: $installed_uuid (expected $UUID)" >&2
   exit 1
 fi

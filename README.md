@@ -34,7 +34,8 @@ standalone clipboard managers can't monitor the clipboard).
 # (optional) one-time data-home setup if you keep the default /opt/copy-gnome
 ./scripts/setup-home.sh
 
-./scripts/install.sh
+./scripts/install-extension.sh
+# or explicitly: ./scripts/install-extension.sh --gnome 50
 # Wayland: LOG OUT and back in, then:
 gnome-extensions enable copy-gnome@clipboard
 ```
