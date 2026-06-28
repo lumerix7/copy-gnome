@@ -8,6 +8,8 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { log } from '../core/log.js';
+import { plainTextPayload, uriListPayload } from '../core/payloads.js';
+import { POPUP_PREVIEW_CHARS, recordPreview } from '../core/preview.js';
 
 // Modal, searchable history list. See docs/07-ui.md. The grabbed actor is a full-monitor
 // backdrop (so clicks outside the panel dismiss it); the panel itself is reactive so blank
@@ -45,9 +47,7 @@ function kindClass(kind) {
 }
 
 function previewLabel(rec) {
-    if (rec.preview) return rec.preview;
-    if (rec.text) return rec.text.replace(/\s+/g, ' ').slice(0, 80);
-    return `[${rec.kind}]`;
+    return recordPreview(rec, { max: POPUP_PREVIEW_CHARS });
 }
 
 function timeLabel(rec) {
@@ -82,7 +82,14 @@ function timeColumnLabel(rec) {
 
 function matches(rec, query) {
     if (!query) return true;
-    const hay = (rec.text || rec.uri || rec.preview || rec.kind || '').toLowerCase();
+    const hay = (
+        plainTextPayload(rec)?.value ||
+        uriListPayload(rec)?.value ||
+        rec.text ||
+        rec.uri ||
+        rec.kind ||
+        ''
+    ).toLowerCase();
     return hay.includes(query.toLowerCase());
 }
 
@@ -308,8 +315,8 @@ export class Popup {
         const anchorActor = opts.anchorActor ?? null;
         this._anchorActor = anchorActor;
         const ui = uiDefaults(this._getUi());
-        let width = num(ui.popupWidth, DEFAULT_UI.popupWidth, 240, 900);
-        let maxHeight = num(ui.popupMaxHeight, DEFAULT_UI.popupMaxHeight, 120, 1200);
+        let width = num(ui.popupWidth, DEFAULT_UI.popupWidth, 240, 8000);
+        let maxHeight = num(ui.popupMaxHeight, DEFAULT_UI.popupMaxHeight, 120, 8000);
         const edgeMargin = num(ui.popupEdgeMargin, DEFAULT_UI.popupEdgeMargin, 0, 96);
         const opacity = num(ui.popupOpacity, DEFAULT_UI.popupOpacity, 0.1, 1);
         const theme = resolvePopupTheme(ui);

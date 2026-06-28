@@ -54,14 +54,9 @@ and ordinary text copies can both arrive as memory sources. The file-twin rule i
 relationship between the current payload and the current `_lastContent` file record, not
 about a source-kind allow/deny policy.
 
-`general.denyAllMemorySources` now defaults to `false`. If it is enabled, the enqueue-side
-MIME filter may skip memory sources before this rule runs. That filter is a legacy safety
-switch, not the definition of a file path twin; keep it marked for cleanup after the
-file-path-twin filtering behavior is proven stable.
-
-When memory sources are allowed, desktop/file-manager copies can emit a stale `text/plain`
-path from the previous file before the real file MIME event arrives. That path is not a
-separate user text copy. Drop it only when all of these are true:
+Desktop/file-manager copies can emit a stale `text/plain` path from the previous file
+before the real file MIME event arrives. That path is not a separate user text copy.
+Drop it only when all of these are true:
 
 - current `job.sourceKind == 'memory'`
 - current payload type is `text/plain`

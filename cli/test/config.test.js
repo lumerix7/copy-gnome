@@ -90,11 +90,36 @@ test("type mismatch keeps the default with a warning", () => {
 });
 
 test("numeric value above max is clamped", () => {
-  const dir = cfgDir("history:\n  maxItems: 999\n");
+  const dir = cfgDir("history:\n  maxItems: 1001\n");
   try {
     const r = loadConfig(dir);
-    assert.equal(r.config.history.maxItems, 500);
-    assert.ok(r.warnings.some(w => /clamped 999 -> 500/.test(w)));
+    assert.equal(r.config.history.maxItems, 1000);
+    assert.ok(r.warnings.some(w => /clamped 1001 -> 1000/.test(w)));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("large popup dimensions are accepted up to monitor-clamped max", () => {
+  const dir = cfgDir("ui:\n  popupWidth: 8000\n  popupMaxHeight: 8000\n");
+  try {
+    const r = loadConfig(dir);
+    assert.equal(r.config.ui.popupWidth, 8000);
+    assert.equal(r.config.ui.popupMaxHeight, 8000);
+    assert.ok(!r.warnings.some(w => /ui\.popup(?:Width|MaxHeight).*clamped/.test(w)));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("popup dimensions above max are clamped", () => {
+  const dir = cfgDir("ui:\n  popupWidth: 8001\n  popupMaxHeight: 9000\n");
+  try {
+    const r = loadConfig(dir);
+    assert.equal(r.config.ui.popupWidth, 8000);
+    assert.equal(r.config.ui.popupMaxHeight, 8000);
+    assert.ok(r.warnings.some(w => /ui\.popupWidth: clamped 8001 -> 8000/.test(w)));
+    assert.ok(r.warnings.some(w => /ui\.popupMaxHeight: clamped 9000 -> 8000/.test(w)));
   } finally {
     cleanup(dir);
   }

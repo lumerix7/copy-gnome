@@ -11,11 +11,9 @@ export const DEFAULTS = {
     general: {
         captureFiles: true,
         captureImages: true,
-        denyAllMemorySources: false,
-        allowMemoryMimes: ['image/*'],
     },
     history: {
-        maxItems: 100,
+        maxItems: 200,
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 3,              // 0 = keep all daily files; N deletes clips-*.jsonl older than N days
         cleanupIntervalSec: 86400,  // periodic expired-file sweep interval (seconds), 15..864000
@@ -62,15 +60,15 @@ export const DEFAULTS = {
 };
 
 const LIMITS = {
-    'history.maxItems': [1, 500],
+    'history.maxItems': [1, 1000],
     'history.maxItemBytes': [1024, 16 * 1024 * 1024],
     'history.maxAgeDays': [0, 3650],
     'history.cleanupIntervalSec': [15, 864000],
     'storage.textMaxBytes': [0, 15 * 1024 * 1024],
     'storage.binaryMaxBytes': [0, 10 * 1024 * 1024],
     'storage.flushIntervalSec': [5, 3600],
-    'ui.popupWidth': [240, 900],
-    'ui.popupMaxHeight': [120, 1200],
+    'ui.popupWidth': [240, 8000],
+    'ui.popupMaxHeight': [120, 8000],
     'ui.popupOffsetX': [-1000, 1000],
     'ui.popupOffsetY': [-1000, 1000],
     'ui.popupEdgeMargin': [0, 96],
@@ -192,7 +190,6 @@ function sanitizeConfig(cfg) {
         ? cfg.ui.popupTheme : DEFAULTS.ui.popupTheme;
 
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
-    cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
     cfg.ui.fileApps = lowerStringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
     cfg.ui.richTextApps = lowerStringList(cfg.ui.richTextApps, DEFAULTS.ui.richTextApps);
     cfg.ui.plainTextApps = lowerStringList(cfg.ui.plainTextApps, DEFAULTS.ui.plainTextApps);

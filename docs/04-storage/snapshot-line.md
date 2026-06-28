@@ -43,7 +43,6 @@ Record fields:
 | `kind`      | yes      | string | Logical item kind: `text`, `rich`, `file`, `image`, `binary`.     |
 | `mime`      | yes      | string | Primary MIME. This should match `payloads[0].mime`.               |
 | `bytes`     | yes      | number | Sum of raw bytes for persisted payload entries.                   |
-| `preview`   | yes      | string | Short UI preview. For rich text, derived from the plain fallback. |
 | `createdAt` | yes      | number | First capture time in GLib microseconds.                          |
 | `usedAt`    | yes      | number | Last restore/touch time in GLib microseconds.                     |
 | `payloads`  | yes      | array  | One or more MIME payload entries. Primary payload first.          |
@@ -71,7 +70,6 @@ Proposed rich-text record:
   "kind": "rich",
   "mime": "text/html",
   "bytes": 4620,
-  "preview": "plain fallback for search and preview",
   "createdAt": 1782924219704377,
   "usedAt": 1782924219704377,
   "payloads": [
@@ -101,7 +99,6 @@ Other target examples:
   "kind": "text",
   "mime": "text/plain;charset=utf-8",
   "bytes": 5,
-  "preview": "hello",
   "createdAt": 1782610000000000,
   "usedAt": 1782610000000000,
   "payloads": [
@@ -116,7 +113,6 @@ Other target examples:
   "kind": "file",
   "mime": "text/uri-list",
   "bytes": 23,
-  "preview": "/home/user/a.txt",
   "createdAt": 1782610000000000,
   "usedAt": 1782610000000000,
   "payloads": [

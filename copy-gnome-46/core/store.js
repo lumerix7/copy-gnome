@@ -155,7 +155,6 @@ function normalizeRecord(obj, maxLineBytes) {
         kind: obj.kind,
         mime: obj.mime,
         bytes: obj.bytes,
-        preview: typeof obj.preview === 'string' ? obj.preview : '',
         createdAt: obj.createdAt,
         usedAt: obj.usedAt,
         payloads,
@@ -359,7 +358,6 @@ export class Store {
             kind: rec.kind,
             mime: rec.mime,
             bytes: rec.bytes ?? 0,
-            preview: rec.preview ?? '',
             createdAt: rec.createdAt,
             usedAt: rec.usedAt,
             payloads: Array.isArray(rec.payloads) ? rec.payloads.map(p => ({

@@ -7,6 +7,7 @@ import Gtk from 'gi://Gtk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import { loadConfig, saveConfig, configStatus } from './core/config.js';
+import { pasteKeybindingsValue } from './core/prefs-validation.js';
 import { Paths } from './core/paths.js';
 import { log } from './core/log.js';
 
@@ -298,12 +299,6 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         group.add(this._boolRow('captureImages', 'Capture images / screenshots',
             'Risky inside GNOME Shell - can destabilize the compositor. Turn off if the session gets unstable.',
             'general'));
-        group.add(this._boolRow('denyAllMemorySources', 'Deny memory clipboard sources',
-            'Skip compositor-owned memory sources; useful for avoiding stale replay events while testing.',
-            'general'));
-        group.add(this._listRow('allowMemoryMimes', 'Allowed memory MIME types',
-            'Comma-separated MIME patterns allowed when memory sources are denied, e.g. image/*.',
-            'general'));
 
         page.add(group);
 
@@ -352,10 +347,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         const group = new Adw.PreferencesGroup({
             title: 'Limits',
-            description: 'Default 100 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
+            description: 'Default 200 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
         });
 
-        group.add(this._spinRow('maxItems', 'Max history items', 1, 500, 1,
+        group.add(this._spinRow('maxItems', 'Max history items', 1, 1000, 1,
             'history', v => v, v => Math.round(v),
             'Maximum entries kept in memory and shown in the popup.'));
         group.add(this._spinRow('maxItemBytes', 'Max item size (KiB)', 1, 16384, 1,
@@ -408,7 +403,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         return row;
     }
 
-    _jsonRow(field, title, subtitle, section) {
+    _jsonRow(field, title, subtitle, section, validate = value => ({ ok: true, value })) {
         const row = this._configRow(section, field, title, subtitle);
         const entry = new Gtk.Entry({
             text: JSON.stringify(this._config[section][field] ?? []),
@@ -417,17 +412,26 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             width_chars: 56,
         });
         entry.connect('notify::text', () => {
+            let parsed;
             try {
-                const value = JSON.parse(entry.text);
-                if (!Array.isArray(value))
-                    throw new Error('expected array');
-                this._config[section][field] = value;
-                row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
-                entry.remove_css_class('error');
-                this._persist();
+                parsed = JSON.parse(entry.text);
             } catch (e) {
+                entry.tooltip_text = e.message;
                 entry.add_css_class('error');
+                return;
             }
+            const r = validate(parsed);
+            if (!r.ok) {
+                log.warn(`prefs: invalid ${section}.${field}: ${r.error}`);
+                entry.tooltip_text = r.error;
+                entry.add_css_class('error');
+                return;
+            }
+            this._config[section][field] = r.value;
+            row.subtitle = this._displayText(this._configSubtitle(section, field, subtitle));
+            entry.tooltip_text = null;
+            entry.remove_css_class('error');
+            this._persist();
         });
         row.add_suffix(entry);
         row.activatable_widget = entry;
@@ -487,10 +491,10 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
 
         const win = new Adw.PreferencesGroup({ title: 'Window' });
-        win.add(this._spinRow('popupWidth', 'Width (px)', 240, 900, 10,
+        win.add(this._spinRow('popupWidth', 'Width (px)', 240, 8000, 10,
             'ui', v => v, v => Math.round(v),
             'Popup target width; shrinks on small monitors.'));
-        win.add(this._spinRow('popupMaxHeight', 'Max height (px)', 120, 1200, 10,
+        win.add(this._spinRow('popupMaxHeight', 'Max height (px)', 120, 8000, 10,
             'ui', v => v, v => Math.round(v),
             'Popup maximum height; content scrolls when needed.'));
         win.add(this._spinRow('popupOffsetX', 'Offset X (px)', -1000, 1000, 10,
@@ -554,7 +558,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             'ui'));
         paste.add(this._jsonRow('pasteKeybindings', 'Paste keybindings',
             'JSON array: [{"keys":["ctrl","shift","v"],"apps":["terminal"]}]',
-            'ui'));
+            'ui', value => pasteKeybindingsValue(value)));
         page.add(paste);
 
         return page;

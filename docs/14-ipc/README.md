@@ -43,14 +43,15 @@ Every method returns a single string: a JSON **envelope**. Success is
 | `Use`              | `s id, s mode`       | `{ id, kind }` - restore + MRU touch, **no auto-paste**; `mode` `""`/`rich`/`plain` |
 | `CopyText`         | `s text`             | `{ id, bytes }` - new text entry + clipboard write |
 | `GetClipboardText` | -                    | `{ hasText, text }`                                |
-| `Search`           | `s query, u limit`   | `{ total, items }` - case-insensitive substring over preview + text/uri payloads |
+| `Search`           | `s query, u limit`   | `{ total, items }` - case-insensitive substring over text/uri payloads |
 | `Remove`           | `s id`               | `{ id }`                                           |
 | `Clear`            | -                    | `{ cleared }`                                      |
 | `Popup`            | -                    | `{}` - toggles the popup, same as the keybinding   |
 | `Status`           | -                    | `{ uuid, version, ready, count }`                  |
 
-`item` shape: `{ id, kind, mime, bytes, preview, createdAt, usedAt }` (timestamps are
-`GLib.get_real_time()` microseconds, as stored); `Get` adds
+`item` shape: `{ id, kind, mime, bytes, preview, createdAt, usedAt }`; `preview` is
+derived from payloads for list/search output and is not stored. Timestamps are
+`GLib.get_real_time()` microseconds, as stored. `Get` adds
 `payloads: [{ mime, encoding, bytes, value }]` - base64 payloads stay base64-encoded
 strings, already bounded by the storage caps ([04-storage](../04-storage/README.md)).
 

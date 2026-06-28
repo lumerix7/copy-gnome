@@ -32,15 +32,12 @@ import {
     recordComparableValue,
     uriListPayload,
 } from './core/payloads.js';
+import { recordPreview } from './core/preview.js';
 import { Indicator } from './ui/indicator.js';
 import { Popup } from './ui/popup.js';
 
 const UUID = 'copy-gnome@clipboard';
 const DEBUG_VALUE_CHARS = 160;
-
-function textPreview(text) {
-    return text.replace(/\s+/g, ' ').trim().slice(0, 100);
-}
 
 function debugValue(value, max = DEBUG_VALUE_CHARS) {
     const text = String(value ?? '');
@@ -58,20 +55,22 @@ function eventCtx(id, seq, fallback = 'extension') {
     return id && Number.isFinite(seq) && seq > 0 ? `[${id},${seq}]` : `[${fallback}]`;
 }
 
-function filePreview(uriList) {
-    const uris = uriList.split('\n').filter(Boolean);
-    const firstUri = uris[0] || '';
-    let first = fileUriPath(firstUri) ?? firstUri;
-    try {
-        first = decodeURIComponent(first);
-    } catch (e) {
-        log.debug(`[capture]: file preview decode failed uri="${debugValue(firstUri)}" value="${debugValue(first)}" reason=${e.message}`);
-    }
-    return uris.length > 1 ? `${first} (+${uris.length - 1} more)` : first;
-}
-
 function uriListCount(uriList) {
-    return uriList.split('\n').filter(Boolean).length;
+    const text = String(uriList ?? '');
+    let count = 0;
+    let lineHasText = false;
+    for (const ch of text) {
+        if (ch === '\n') {
+            if (lineHasText)
+                count++;
+            lineHasText = false;
+        } else {
+            lineHasText = true;
+        }
+    }
+    if (lineHasText)
+        count++;
+    return count;
 }
 
 function gnomeCopiedFilesPayload(uriList) {
@@ -177,8 +176,6 @@ export default class CopyGnomeExtension extends Extension {
             onSuppressedRepeat: r => this._onSuppressedRepeat(r),
             captureFiles: () => this._config.general.captureFiles,
             captureImages: () => this._config.general.captureImages,
-            denyAllMemorySources: () => this._config.general.denyAllMemorySources,
-            allowMemoryMimes: () => this._config.general.allowMemoryMimes,
             maxItemBytes: () => this._config.history.maxItemBytes,
             maxTextBytes: () => this._config.storage.textMaxBytes,
             maxBinaryBytes: () => this._config.storage.binaryMaxBytes,
@@ -432,7 +429,6 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'rich',
                     mime: c.mime || HTML_MIME,
                     bytes: payloadBytesTotal(payloads),
-                    preview: textPreview(text),
                     payloads,
                 });
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=rich mime=${rec.mime} bytes=${rec.bytes} richBytes=${richBytes} textBytes=${textBytes} companionMimes=${companionPayloads.map(p => p.mime).join(',') || '(none)'}`);
@@ -445,17 +441,15 @@ export default class CopyGnomeExtension extends Extension {
                 const size = byteLength(text);
 
                 if (c.kind === 'file') {
-                    const preview = filePreview(text);
                     const payloads = [makePayload(URI_LIST_MIME, 'uri-list', text, size)];
                     const rec = this._history.add({
                         id: c.id,
                         kind: 'file',
                         mime: URI_LIST_MIME,
                         bytes: size,
-                        preview,
                         payloads,
                     });
-                    log.debug(`${ctx}: history add recordId=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${debugValue(preview)}"`);
+                    log.debug(`${ctx}: history add recordId=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${debugValue(recordPreview(rec))}"`);
                     return;
                 }
                 if (size > cfg.history.maxItemBytes) {
@@ -472,7 +466,6 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'text',
                     mime: c.mime || PLAIN_TEXT_MIME,
                     bytes: size,
-                    preview: textPreview(text),
                     payloads,
                 });
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=text bytes=${size}`);
@@ -501,7 +494,6 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'image',
                     mime: c.mime,
                     bytes: u8.length,
-                    preview: `[image ${Math.round(u8.length / 1024)} KB]`,
                     payloads,
                 });
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=image bytes=${u8.length}`);
@@ -962,7 +954,7 @@ export default class CopyGnomeExtension extends Extension {
             kind: rec.kind,
             mime: rec.mime,
             bytes: rec.bytes,
-            preview: rec.preview,
+            preview: recordPreview(rec),
             createdAt: rec.createdAt,
             usedAt: rec.usedAt,
         };
@@ -1041,7 +1033,6 @@ export default class CopyGnomeExtension extends Extension {
             kind: 'text',
             mime: PLAIN_TEXT_MIME,
             bytes: size,
-            preview: textPreview(value),
             payloads: [makeTextPayload(PLAIN_TEXT_MIME, value, size)],
         });
         log.info(`[ipc]: copy recordId=${rec.id} bytes=${size}`);
@@ -1063,7 +1054,7 @@ export default class CopyGnomeExtension extends Extension {
     }
 
     _ipcSearchText(rec) {
-        const parts = [rec.preview ?? ''];
+        const parts = [];
         for (const p of rec.payloads ?? []) {
             if (p?.encoding === 'utf8' || p?.encoding === 'uri-list')
                 parts.push(p.value ?? '');

@@ -82,7 +82,7 @@ formats may be stored as additional payloads when they fit the combined text cap
 | Payload index | MIME | Required | Encoding | Value / Role |
 |---------------|------|----------|----------|--------------|
 | `0` | first offered rich MIME in priority order: `text/html`, `text/rtf`, `text/richtext`, `text/markdown` | yes | `utf8` | primary rich representation used by rich restore |
-| `1` | `text/plain;charset=utf-8` | yes | `utf8` | plain fallback, preview source, search text, plain restore |
+| `1` | `text/plain;charset=utf-8` | yes | `utf8` | plain fallback, display preview source, search text, plain restore |
 | `2+` | remaining offered rich companion MIME values from `text/html`, `text/rtf`, `text/richtext`, `text/markdown` | no | `utf8` | preserved companion formats for future multi-MIME restore |
 
 Rich text payload ordering is semantic:
@@ -102,8 +102,8 @@ by default.
 The in-memory record should match the persisted target shape:
 
 - `payloads` is the only place where payload values live.
-- Top-level `preview` is derived, not a full duplicate payload.
-- Search should read the best plain-text payload from `payloads`, falling back to `preview`.
+- Top-level `preview` is not persisted; list/search output derives it from `payloads`.
+- Search should read text/uri payloads from `payloads`.
 - Restore should choose payloads by MIME/encoding.
 - Old single-payload JSONL records are not a compatibility target. After implementing this
   design, old data can be discarded or cleaned by offline tooling.

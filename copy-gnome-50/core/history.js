@@ -5,7 +5,7 @@ import { log } from './log.js';
 // In-memory MRU model - the single source of truth for the running session.
 //
 // Record shape:
-//   { id, kind, mime, bytes, preview, createdAt, usedAt, payloads }
+//   { id, kind, mime, bytes, createdAt, usedAt, payloads }
 //
 // Ordering: usedAt descending. Re-selecting an existing entry (write-back) updates its
 // usedAt -> floats to top; re-copying instead adds a brand-new record at the top.

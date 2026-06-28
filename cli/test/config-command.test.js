@@ -66,9 +66,9 @@ test("setConfigValue round-trips a boolean and writes config.yaml", () => {
 });
 
 test("setConfigValue rejects an out-of-range number", () => {
-  const r = setConfigValue("history.maxItems", "999");
+  const r = setConfigValue("history.maxItems", "1001");
   assert.equal(r.ok, false);
-  assert.match(r.error, /must be between 1 and 500/);
+  assert.match(r.error, /must be between 1 and 1000/);
 });
 
 test("setConfigValue rejects a bad enum value", () => {
@@ -89,6 +89,22 @@ test("setConfigValue accepts and writes a valid number", () => {
   assert.equal(set.ok, true);
   assert.equal(set.value, 12);
   assert.equal(getConfigValue("ui.popupOffsetX").value, 12);
+});
+
+test("setConfigValue accepts large popup dimensions up to monitor-clamped max", () => {
+  const width = setConfigValue("ui.popupWidth", "8000");
+  assert.equal(width.ok, true);
+  assert.equal(width.value, 8000);
+
+  const height = setConfigValue("ui.popupMaxHeight", "8000");
+  assert.equal(height.ok, true);
+  assert.equal(height.value, 8000);
+});
+
+test("setConfigValue rejects popup dimensions above max", () => {
+  const r = setConfigValue("ui.popupWidth", "8001");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /must be between 240 and 8000/);
 });
 
 test("setConfigValue parses YAML flow arrays", () => {

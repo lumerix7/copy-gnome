@@ -108,20 +108,6 @@ function sourceKindFromLabel(label) {
     return label.includes('SelectionSourceMemory') ? 'memory' : 'non-memory';
 }
 
-function mimeMatches(pattern, mime) {
-    if (pattern === '*')
-        return true;
-    if (pattern.endsWith('/*'))
-        return mime.startsWith(pattern.slice(0, -1));
-    return pattern === mime;
-}
-
-function allowedMimes(mimes, patterns) {
-    if (!Array.isArray(mimes) || !Array.isArray(patterns))
-        return [];
-    return mimes.filter(mime => patterns.some(pattern => mimeMatches(pattern, mime)));
-}
-
 function uriListEntries(uriListText) {
     return uriListText
         .split('\n')
@@ -194,14 +180,12 @@ function parseSpecialCopiedFiles(text) {
 export class Monitor {
     constructor({
         onCapture, onSuppressedRepeat, captureFiles, captureImages, maxItemBytes,
-        maxTextBytes, maxBinaryBytes, secretMimes, denyAllMemorySources, allowMemoryMimes,
+        maxTextBytes, maxBinaryBytes, secretMimes,
     } = {}) {
         this._onCapture = typeof onCapture === 'function' ? onCapture : (() => {});
         this._onSuppressedRepeat = typeof onSuppressedRepeat === 'function' ? onSuppressedRepeat : (() => {});
         this._captureFiles = captureFiles ?? (() => false);
         this._captureImages = captureImages ?? (() => false);
-        this._denyAllMemorySources = denyAllMemorySources ?? (() => true);
-        this._allowMemoryMimes = allowMemoryMimes ?? (() => []);
         this._maxItemBytes = maxItemBytes ?? (() => 16 * 1024 * 1024);
         this._maxTextBytes = maxTextBytes ?? this._maxItemBytes;
         this._maxBinaryBytes = maxBinaryBytes ?? this._maxItemBytes;
@@ -394,23 +378,13 @@ export class Monitor {
         const sourceLabel = debugSource(source);
         const sourceKind = sourceKindFromLabel(sourceLabel);
         const rawMimes = this._readSourceMimes(source);
-        let mimes = rawMimes;
-        if (sourceKind === 'memory' && this._denyAllMemorySources()) {
-            const allow = this._allowMemoryMimes();
-            mimes = allowedMimes(rawMimes, allow);
-            if (mimes.length === 0) {
-                log.debug(`${eventCtx(id, seq)}: queue skipped sourceKind=memory reason=denyAllMemorySources mimes=${rawMimes.join(',') || '(none)'} allowMemoryMimes=${allow.join(',') || '(none)'} source=${sourceLabel}`);
-                return;
-            }
-            log.debug(`${eventCtx(id, seq)}: queue memory allowed mimes=${rawMimes.join(',') || '(none)'} allowedMimes=${mimes.join(',')} allowMemoryMimes=${allow.join(',') || '(none)'}`);
-        }
         const job = {
             id,
             seq,
             source,
             sourceLabel,
             sourceKind,
-            mimes,
+            mimes: rawMimes,
         };
         this._queue.push(job);
         log.debug(`${jobCtx(job)}: queue received/enqueued sourceKind=${job.sourceKind} source=${sourceLabel} queued=${this._queue.length} running=${this._processing ? 'yes' : 'no'}`);

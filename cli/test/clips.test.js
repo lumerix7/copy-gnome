@@ -17,7 +17,6 @@ const textItem = id => ({
   kind: "text",
   mime: "text/plain;charset=utf-8",
   bytes: 5,
-  preview: "hello",
   createdAt: 1,
   usedAt: 1,
   payloads: [

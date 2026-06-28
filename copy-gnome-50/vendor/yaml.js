@@ -210,15 +210,26 @@ function emitSeq(arr, indent) {
             if (entries.length === 0) {
                 out.push(`${pad}- {}`);
             } else {
-                out.push(`${pad}- ${entries[0][0]}: ${formatScalar(entries[0][1])}`);
+                out.push(`${pad}- ${entries[0][0]}: ${formatInline(entries[0][1])}`);
                 for (let i = 1; i < entries.length; i++)
-                    out.push(`${pad}  ${entries[i][0]}: ${formatScalar(entries[i][1])}`);
+                    out.push(`${pad}  ${entries[i][0]}: ${formatInline(entries[i][1])}`);
             }
         } else {
-            out.push(`${pad}- ${formatScalar(item)}`);
+            out.push(`${pad}- ${formatInline(item)}`);
         }
     }
     return out;
+}
+
+function formatInline(v) {
+    if (Array.isArray(v))
+        return `[${v.map(item => formatInline(item)).join(', ')}]`;
+    if (v !== null && typeof v === 'object') {
+        const entries = Object.entries(v)
+            .map(([key, val]) => `${key}: ${formatInline(val)}`);
+        return `{${entries.join(', ')}}`;
+    }
+    return formatScalar(v);
 }
 
 function formatScalar(v) {

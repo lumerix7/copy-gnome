@@ -63,7 +63,6 @@ payload values live in `payloads`; top-level fields are metadata only.
   "kind": "text",
   "mime": "text/plain;charset=utf-8",
   "bytes": 19,
-  "preview": "06-history-model.md",
   "createdAt": 1782734910223125,
   "usedAt": 1782734910223125,
   "payloads": [
@@ -83,7 +82,6 @@ payload values live in `payloads`; top-level fields are metadata only.
 | `kind`      | yes       | `text`, `rich`, `file`, `image`, or `binary`             |
 | `mime`      | yes       | primary MIME; normally `payloads[0].mime`                |
 | `bytes`     | yes       | sum of persisted payload raw byte counts                 |
-| `preview`   | yes       | UI/search preview string                                 |
 | `createdAt` | yes       | first insert time from `GLib.get_real_time()`            |
 | `usedAt`    | yes       | MRU time from `GLib.get_real_time()`                     |
 | `payloads`  | yes       | one or more payload entries; primary payload first       |
@@ -91,6 +89,7 @@ payload values live in `payloads`; top-level fields are metadata only.
 These fields are not persisted:
 
 - queue/debug fields: `seq`, `sourceKind`, `sourceLabel`, `mimes`
+- derived display fields: `preview`
 - old file-twin process fields: `fileTwinUriList`, `synthesizedFilePath`
 - monitor state: `_lastContent`
 - content identity fields: hash, digest, dedup key

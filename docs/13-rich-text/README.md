@@ -22,7 +22,7 @@ When a queued source advertises a rich text MIME (`text/html`, `text/rtf`,
    - `text/rtf`
    - `text/richtext`
    - `text/markdown`
-6. Use the plain payload to derive `preview`, row labels, and search text.
+6. Use the plain payload to derive list/search previews, row labels, and search text.
 7. For `_lastContent`, compare `type=rich` using a value derived from the primary rich
    payload plus the plain fallback, not from plain text alone.
 

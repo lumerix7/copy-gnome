@@ -5,14 +5,11 @@
 # config.json is also accepted (same keys) if you prefer JSON.
 
 general:
-  captureFiles: true             # copied files are stored as URI/path references only
-  captureImages: true            # screenshot/image clipboard capture; risky inside GNOME Shell
-  denyAllMemorySources: false    # legacy safety switch; TODO cleanup after file-twin filtering settles
-  allowMemoryMimes:              # only used when denyAllMemorySources=true
-    - image/*
+  captureFiles: true              # copied files are stored as URI/path references only
+  captureImages: true             # screenshot/image clipboard capture; risky inside GNOME Shell
 
 history:
-  maxItems: 100                   # visible history count, max 500
+  maxItems: 200                   # visible history count, max 1000
   maxItemBytes: 4194304           # 4 MiB default; max 16 MiB
   maxAgeDays: 3                   # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
   cleanupIntervalSec: 86400       # periodic expired-file sweep interval (seconds), 15..864000
@@ -30,8 +27,8 @@ privacy:
   # secretMimes: ["x-kde-passwordManagerHint"]
 
 ui:
-  popupWidth: 640                 # px; auto-shrinks on small monitors
-  popupMaxHeight: 800             # px; auto-shrinks on small monitors
+  popupWidth: 640                 # px, 240..8000; auto-shrinks to monitor
+  popupMaxHeight: 800             # px, 120..8000; auto-shrinks to monitor
   popupOffsetX: 0                 # final px adjustment from centered position
   popupOffsetY: 0
   popupEdgeMargin: 8              # min distance from monitor edge
@@ -45,19 +42,19 @@ ui:
   skipClipboardWriteForRecentTopSec: 3
                                   # 0 disables. If row 1 was updated within this many
                                   # seconds, restore/paste it without rewriting clipboard.
-  fileApps:                      # lower-case wm_class substrings that receive copied
-    - org.gnome.nautilus         # files as text/uri-list; others receive path text
-  richTextApps:                  # rich-text records restore with primary rich MIME for these apps
+  fileApps:                       # lower-case wm_class substrings that receive copied
+    - org.gnome.nautilus          # files as text/uri-list; others receive path text
+  richTextApps:                   # rich-text records restore with primary rich MIME for these apps
     - libreoffice
     - soffice
-  plainTextApps:                 # wins over richTextApps; restore rich text as text/plain
+  plainTextApps:                  # wins over richTextApps; restore rich text as text/plain
     - terminal
-  defaultPasteKeys:              # used when no pasteKeybindings entry matches
+  defaultPasteKeys:               # used when no pasteKeybindings entry matches
     - ctrl
     - v
-  pasteKeybindings:              # matched by lower-case wm_class substring
-    - keys: [ctrl, shift, v]     # case-insensitive; order/repeats preserved
+  pasteKeybindings:               # matched by lower-case wm_class substring
+    - keys: [ctrl, shift, v]      # case-insensitive; order/repeats preserved
       apps: [terminal]
 
 logging:
-  level: info                     # error | warn | info | debug
+  level: info                      # error | warn | info | debug

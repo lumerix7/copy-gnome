@@ -72,11 +72,9 @@ on startup so it's never ambiguous).
 general:
   captureFiles: true                # copied files are stored as URI/path references only
   captureImages: true               # screenshot/image capture; risky inside GNOME Shell
-  denyAllMemorySources: false      # legacy safety switch; TODO cleanup after file-twin filtering settles
-  allowMemoryMimes: ["image/*"]     # only used when denyAllMemorySources=true
 
 history:
-  maxItems: 100                     # visible history count, max 500
+  maxItems: 200                     # visible history count, max 1000
   maxItemBytes: 4194304             # 4 MiB default; max 16 MiB
   maxAgeDays: 3                     # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
   cleanupIntervalSec: 86400         # seconds; periodic expired-file sweep interval, 15..864000
@@ -93,8 +91,8 @@ privacy:
   # secretMimes: ["x-kde-passwordManagerHint"]
 
 ui:
-  popupWidth: 640                   # px; auto-shrinks on small monitors
-  popupMaxHeight: 800               # px; auto-shrinks on small monitors
+  popupWidth: 640                   # px, 240..8000; auto-shrinks to monitor
+  popupMaxHeight: 800               # px, 120..8000; auto-shrinks to monitor
   popupOffsetX: 0                   # final px adjustment from centered position
   popupOffsetY: 0
   popupEdgeMargin: 8                # min distance from monitor edge
