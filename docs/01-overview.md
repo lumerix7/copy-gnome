@@ -52,6 +52,6 @@ implemented as a Shell extension so it works where standalone clipboard managers
 - **CopyQ** - feature reference (history, search, scripting, edit).
 - **Pano** (GNOME extension) - uses `MetaSelection` + a native libgda SQLite store and
   on-disk image cache. We borrow the selection-monitoring approach but avoid the native
-  dependency (see [04-storage](04-storage.md)).
+  dependency (see [04-storage](04-storage/README.md)).
 - **Clipboard Indicator** (GNOME extension) - simple GSettings-backed history; shows the
   limits of storing everything in GSettings (we don't).

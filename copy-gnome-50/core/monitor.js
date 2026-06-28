@@ -2,6 +2,7 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import { log } from './log.js';
+import { PLAIN_TEXT_MIME, RICH_TEXT_MIMES, richComparableValue } from './payloads.js';
 
 // Watches Mutter's selection for clipboard-owner changes (the Wayland-correct way; no
 // polling). Producer/consumer split: _onOwnerChanged (enqueue side) only snapshots the
@@ -11,6 +12,7 @@ import { log } from './log.js';
 //
 // Candidate shapes handed to onCapture:
 //   { kind: 'text',  id, seq, mime, text }
+//   { kind: 'rich',  id, seq, mime, rich, richBytes, text, textMime, textBytes }
 //   { kind: 'file',  id, seq, mime: 'text/uri-list', text }   // text = newline-joined uris
 //   { kind: 'image', id, seq, mime, bytes }                   // bytes = JS-owned Uint8Array
 // onSuppressedRepeat receives { id, seq, reason, kind, mime, value, sourceKind } when a
@@ -18,7 +20,7 @@ import { log } from './log.js';
 //
 // `id` is a uuid minted when the owner-changed is received; for a captured event it becomes
 // the history record's id, so one id threads event -> record -> logs.
-// See docs/features/clipboard-capture/clipboard-capture-design.md.
+// See docs/03-clipboard/capture-pipeline.md.
 
 const IMAGE_READ_FAILURE_LIMIT = 3;
 const READ_TIMEOUT_MS = 2000;
@@ -32,6 +34,9 @@ function supportedImageMime(mimes) {
 }
 
 const TEXT_MIMES = ['text/plain;charset=utf-8', 'text/plain', 'UTF8_STRING'];
+function richTextMime(mimes) {
+    return RICH_TEXT_MIMES.find(m => mimes.includes(m)) ?? null;
+}
 
 function textMime(mimes) {
     return TEXT_MIMES.find(m => mimes.includes(m)) ?? null;
@@ -426,6 +431,7 @@ export class Monitor {
             const imageMime = supportedImageMime(mimes);
             const hasUnsupportedImage = !imageMime && mimes.some(m => m.startsWith('image/'));
             const plainMime = textMime(mimes);
+            const richMime = richTextMime(mimes);
 
             if (has('text/uri-list') || has('x-special/gnome-copied-files')) {
                 if (!this._captureFiles()) {
@@ -479,6 +485,77 @@ export class Monitor {
                     log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file mime=${mime} fileAction=${fileAction} reason=empty remaining=${this._queue.length}`);
                 }
                 return;
+            }
+
+            if (richMime && plainMime) {
+                const maxBytes = Math.min(this._maxItemBytes(), this._maxTextBytes());
+                const capName = this._maxTextBytes() <= this._maxItemBytes()
+                    ? 'storage.textMaxBytes'
+                    : 'history.maxItemBytes';
+                const richResult = await this._readSourceBytes(job.source, richMime, maxBytes);
+                if (this._stopped) return;
+                if (richResult.ok) {
+                    const plainResult = await this._readSourceBytes(job.source, plainMime, maxBytes);
+                    if (this._stopped) return;
+                    let combinedBytes = richResult.bytes.length + (plainResult.ok ? plainResult.bytes.length : 0);
+                    if (plainResult.ok && combinedBytes <= maxBytes) {
+                        const companionPayloads = await this._readRichTextCompanions(
+                            job,
+                            mimes,
+                            new Set([richMime, plainMime]),
+                            maxBytes - combinedBytes);
+                        if (this._stopped) return;
+                        for (const payload of companionPayloads)
+                            combinedBytes += payload.bytes;
+                        const rich = new TextDecoder().decode(richResult.bytes);
+                        const text = new TextDecoder().decode(plainResult.bytes);
+                        if (rich && text) {
+                            const candidate = {
+                                kind: 'rich',
+                                mime: richMime,
+                                value: richComparableValue(rich, text),
+                            };
+                            const dropReason = this._dropReason(job, candidate);
+                            if (dropReason) {
+                                this._notifySuppressedRepeat(job, candidate, dropReason);
+                                log.debug(`${jobCtx(job)}: queue handled status=dropped kind=rich mime=${richMime} reason=${dropReason} bytes=${combinedBytes} remaining=${this._queue.length}`);
+                                return;
+                            }
+                            log.debug(`${jobCtx(job)}: capture rich mime=${richMime} richBytes=${richResult.bytes.length} textBytes=${plainResult.bytes.length} text="${debugText(text)}"`);
+                            this._onCapture({
+                                kind: 'rich',
+                                id: job.id,
+                                seq: job.seq,
+                                mime: richMime,
+                                rich,
+                                richBytes: richResult.bytes.length,
+                                text,
+                                textMime: PLAIN_TEXT_MIME,
+                                textBytes: plainResult.bytes.length,
+                                companionPayloads,
+                            });
+                            this.setLastContent({
+                                id: job.id,
+                                origin: 'capture',
+                                sourceKind: job.sourceKind,
+                                source: job.sourceLabel,
+                                type: 'rich',
+                                value: candidate.value,
+                            });
+                            log.debug(`${jobCtx(job)}: queue handled status=captured kind=rich mime=${richMime} bytes=${combinedBytes} remaining=${this._queue.length}`);
+                            return;
+                        }
+                        log.debug(`${jobCtx(job)}: rich capture fallback reason=empty richBytes=${richResult.bytes.length} textBytes=${plainResult.bytes.length}`);
+                    } else if (plainResult.ok) {
+                        log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=combined-cap bytes=${combinedBytes} maxBytes=${maxBytes} cap=${capName}`);
+                    } else {
+                        const details = readLimitDetails(plainResult, capName, maxBytes);
+                        log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=plain-read-${plainResult.reason}${details}`);
+                    }
+                } else {
+                    const details = readLimitDetails(richResult, capName, maxBytes);
+                    log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=${richResult.reason}${details}`);
+                }
             }
 
             // Prefer text when offered; many apps offer both text and image targets.
@@ -587,6 +664,35 @@ export class Monitor {
             },
             { ok: false, stream: null, reason: 'timeout' },
             { ok: false, stream: null, reason: 'read-error' });
+    }
+
+    async _readRichTextCompanions(job, mimes, skipMimes, remainingBytes) {
+        if (!(remainingBytes > 0))
+            return [];
+        const out = [];
+        for (const mime of RICH_TEXT_MIMES) {
+            if (!mimes.includes(mime) || skipMimes.has(mime))
+                continue;
+            const result = await this._readSourceBytes(job.source, mime, remainingBytes);
+            if (this._stopped)
+                return out;
+            if (!result.ok) {
+                const details = readLimitDetails(result, 'rich-text-companion', remainingBytes);
+                log.debug(`${jobCtx(job)}: rich companion skipped mime=${mime} reason=${result.reason}${details}`);
+                continue;
+            }
+            const value = new TextDecoder().decode(result.bytes);
+            if (!value) {
+                log.debug(`${jobCtx(job)}: rich companion skipped mime=${mime} reason=empty`);
+                continue;
+            }
+            out.push({ mime, encoding: 'utf8', value, bytes: result.bytes.length });
+            remainingBytes -= result.bytes.length;
+            log.debug(`${jobCtx(job)}: rich companion captured mime=${mime} bytes=${result.bytes.length} remainingBytes=${remainingBytes}`);
+            if (remainingBytes <= 0)
+                break;
+        }
+        return out;
     }
 
     _withTimeout(label, start, timeoutValue, errorValue) {

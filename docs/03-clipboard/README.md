@@ -1,5 +1,13 @@
 # 03 - Clipboard: monitor, capture, write-back, paste, persistence, privacy
 
+## Reading Order
+
+| Doc                                     | Topic                                                      |
+|-----------------------------------------|------------------------------------------------------------|
+| [README](README.md)                     | Monitoring, MIME priority, write-back, auto-paste, privacy |
+| [capture-pipeline](capture-pipeline.md) | Restore/enqueue/drain model, `_lastContent`, drop reasons  |
+| [file-twin-design](file-twin-design.md) | GNOME 50 file-copy capture/restore and memory path twins   |
+
 ## Monitoring (Wayland-correct)
 
 Do **not** poll. Use Mutter's selection API, available from inside the Shell:
@@ -35,7 +43,7 @@ representation from that same queued `source`.
 Pick the canonical type to store, while **preserving all offered mimes for faithful
 write-back** when feasible:
 
-1. `text/uri-list` / `x-special/gnome-copied-files` → **file copy** only when `general.captureFiles` is enabled (store one URI-list reference record, never file bytes; see [04](04-storage.md)).
+1. `text/uri-list` / `x-special/gnome-copied-files` → **file copy** only when `general.captureFiles` is enabled (store one URI-list reference record, never file bytes; see [04](../04-storage/README.md)).
 2. `image/png` (or other `image/*`) → non-file image payload only when `general.captureImages` is enabled.
 3. `text/html` (+ keep a `text/plain` fallback).
 4. `text/plain;charset=utf-8` / `text/plain` → text entry.
@@ -65,7 +73,7 @@ to write GNOME's file-copy MIME (`x-special/gnome-copied-files`) or decoded path
 If a later `Meta.SelectionSourceMemory` event exposes the previous file path as
 `text/plain`, the monitor drops it only when it exactly matches the decoded current file
 URI-list path; other memory text remains capturable. See
-[file-twin-design](features/clipboard-capture/file-twin-design.md).
+[file-twin-design](file-twin-design.md).
 
 URI-list input accepts both standard `file:///absolute/path` and authority-less
 `file:/absolute/path` file URIs; copy-gnome stores and restores URI-list output as
@@ -121,6 +129,14 @@ run. The default is 3 seconds; `0` disables the shortcut, and the accepted range
 This mainly avoids repeatedly rewriting the system clipboard during short bursts of row-1
 paste/restore. It also keeps file cut/paste flows closer to the compositor's current
 selection and reduces self-write clipboard queue noise during repeated row-1 paste.
+
+For `kind=rich` records the shortcut additionally requires the resolved paste mode
+(`rich`/`plain`, see [13-rich-text](../13-rich-text/README.md#paste-policy)) to match the
+mode actually written last time (`rec.lastPasteMode`, in-memory only, not persisted). The
+write is single-MIME, so skipping it when the mode changed would leave the clipboard
+offering the wrong (or no) target for the new mode. The very first restore of a rich record
+always writes for real, even inside the window, since no prior mode is confirmed yet; only a
+later restore of the same row in the same mode can skip.
 
 
 ## Auto-paste (optional)
@@ -182,4 +198,4 @@ Skip capturing when any of:
   configurable, off by default.
 - Item exceeds `maxItemBytes` (configurable; oversized → skip or truncate-note).
 
-All exclusion rules are config-driven; see [05](05-config.md).
+All exclusion rules are config-driven; see [05](../05-config.md).

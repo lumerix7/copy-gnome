@@ -105,6 +105,49 @@
     background-color: rgba(0, 0, 0, 0.13);
 }
 
+.cg-item-menu {
+    padding: 4px;
+    spacing: 2px;
+    border-radius: 8px;
+    min-width: 120px;
+}
+
+.cg-item-menu-dark {
+    background-color: rgba(45, 45, 49, 0.98);
+    color: #f2f2f0;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 4px 14px 1px rgba(0, 0, 0, 0.32);
+}
+
+.cg-item-menu-light {
+    background-color: rgba(246, 246, 242, 0.98);
+    color: #242426;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    box-shadow: 0 4px 14px 1px rgba(0, 0, 0, 0.20);
+}
+
+.cg-item-menu-button {
+    padding: 6px 12px;
+    border-radius: 6px;
+    text-align: left;
+}
+
+.cg-item-menu-button:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.cg-item-menu-light .cg-item-menu-button:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.cg-item-menu-danger {
+    color: #e7aaa0;
+}
+
+.cg-item-menu-light .cg-item-menu-danger {
+    color: #9a4039;
+}
+
 .cg-row-box {
     spacing: 6px;
 }

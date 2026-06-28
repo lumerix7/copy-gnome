@@ -14,6 +14,21 @@ import { History } from './core/history.js';
 import { Monitor } from './core/monitor.js';
 import * as Clipboard from './core/clipboard.js';
 import { paste, resetPaste } from './core/paste.js';
+import {
+    HTML_MIME,
+    PLAIN_TEXT_MIME,
+    URI_LIST_MIME,
+    binaryPayload,
+    makePayload,
+    makeTextPayload,
+    payloadBytesTotal,
+    plainTextPayload,
+    richComparableValue,
+    richPayload,
+    recordComparableType,
+    recordComparableValue,
+    uriListPayload,
+} from './core/payloads.js';
 import { Indicator } from './ui/indicator.js';
 import { Popup } from './ui/popup.js';
 
@@ -103,15 +118,9 @@ function filePathText(uriList) {
 }
 
 function recordMatchesDrop(rec, drop) {
-    if (!rec || !drop || rec.kind !== drop.kind)
+    if (!rec || !drop || recordComparableType(rec) !== drop.kind)
         return false;
-    if (drop.kind === 'text')
-        return rec.text === drop.value;
-    if (drop.kind === 'file')
-        return rec.uri === drop.value;
-    if (drop.kind === 'image' || drop.kind === 'binary')
-        return rec.data === drop.value;
-    return false;
+    return recordComparableValue(rec) === drop.value;
 }
 
 export default class CopyGnomeExtension extends Extension {
@@ -176,7 +185,8 @@ export default class CopyGnomeExtension extends Extension {
 
         this._popup = new Popup({
             getItems: () => this._history.list(),
-            onActivate: (rec, targetWindow) => this._restore(rec, targetWindow),
+            onActivate: (rec, targetWindow, opts) => this._restore(rec, targetWindow, opts),
+            onRemove: rec => this._history.remove(rec.id),
             onClear: () => this._history.clear(),
             onSave: () => this._flushFromPopup(),
             getUi: () => this._uiConfig(),
@@ -187,6 +197,11 @@ export default class CopyGnomeExtension extends Extension {
                 placement: 'panel',
                 anchorActor,
             }),
+            onShow: (anchorActor, targetWindow) => this._popup.show(targetWindow, {
+                placement: 'panel',
+                anchorActor,
+            }),
+            onClear: () => this._history.clear(),
         });
         Main.panel.addToStatusArea(UUID, this._indicator);
 
@@ -344,7 +359,45 @@ export default class CopyGnomeExtension extends Extension {
             const cfg = this._config;
             const seq = Number.isFinite(c.seq) ? c.seq : 0;
             const ctx = eventCtx(c.id, seq);
-            if (c.kind === 'text' || c.kind === 'file') {
+            if (c.kind === 'rich') {
+                const rich = c.rich;
+                const text = c.text;
+                if (!rich || !text) {
+                    log.debug(`${ctx}: capture skipped kind=rich reason=empty-payload`);
+                    return;
+                }
+                const richBytes = Number.isFinite(c.richBytes) ? c.richBytes : byteLength(rich);
+                const textBytes = Number.isFinite(c.textBytes) ? c.textBytes : byteLength(text);
+                const companionPayloads = Array.isArray(c.companionPayloads)
+                    ? c.companionPayloads
+                        .filter(p => p && typeof p.mime === 'string' &&
+                            typeof p.value === 'string' && Number.isFinite(p.bytes))
+                        .map(p => makeTextPayload(p.mime, p.value, p.bytes))
+                    : [];
+                const size = richBytes + textBytes + payloadBytesTotal(companionPayloads);
+                if (size > cfg.history.maxItemBytes) {
+                    log.debug(`${ctx}: capture skipped kind=rich reason=history-max-bytes bytes=${size} max=${cfg.history.maxItemBytes}`);
+                    return;
+                }
+                if (size > cfg.storage.textMaxBytes) {
+                    log.warn(`${ctx}: capture skipped kind=rich reason=text-cap bytes=${size} max=${cfg.storage.textMaxBytes}`);
+                    return;
+                }
+                const payloads = [
+                    makeTextPayload(c.mime || HTML_MIME, rich, richBytes),
+                    makeTextPayload(c.textMime || PLAIN_TEXT_MIME, text, textBytes),
+                    ...companionPayloads,
+                ];
+                const rec = this._history.add({
+                    id: c.id,
+                    kind: 'rich',
+                    mime: c.mime || HTML_MIME,
+                    bytes: payloadBytesTotal(payloads),
+                    preview: textPreview(text),
+                    payloads,
+                });
+                log.debug(`${ctx}: history add recordId=${rec.id} kind=rich mime=${rec.mime} bytes=${rec.bytes} richBytes=${richBytes} textBytes=${textBytes} companionMimes=${companionPayloads.map(p => p.mime).join(',') || '(none)'}`);
+            } else if (c.kind === 'text' || c.kind === 'file') {
                 const text = c.text;
                 if (!text) {
                     log.debug(`${ctx}: capture skipped kind=${c.kind} reason=empty-text`);
@@ -354,11 +407,14 @@ export default class CopyGnomeExtension extends Extension {
 
                 if (c.kind === 'file') {
                     const preview = filePreview(text);
+                    const payloads = [makePayload(URI_LIST_MIME, 'uri-list', text, size)];
                     const rec = this._history.add({
                         id: c.id,
-                        kind: 'file', mime: 'text/uri-list', text: null,
-                        encoding: 'uri',
-                        uri: text, bytes: size, preview,
+                        kind: 'file',
+                        mime: URI_LIST_MIME,
+                        bytes: size,
+                        preview,
+                        payloads,
                     });
                     log.debug(`${ctx}: history add recordId=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${debugValue(preview)}"`);
                     return;
@@ -371,10 +427,14 @@ export default class CopyGnomeExtension extends Extension {
                     log.warn(`${ctx}: capture skipped kind=text reason=text-cap bytes=${size} max=${cfg.storage.textMaxBytes}`);
                     return;
                 }
+                const payloads = [makeTextPayload(c.mime || PLAIN_TEXT_MIME, text, size)];
                 const rec = this._history.add({
                     id: c.id,
-                    kind: 'text', mime: c.mime, encoding: 'utf8', text,
-                    bytes: size, preview: textPreview(text),
+                    kind: 'text',
+                    mime: c.mime || PLAIN_TEXT_MIME,
+                    bytes: size,
+                    preview: textPreview(text),
+                    payloads,
                 });
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=text bytes=${size}`);
             } else if (c.kind === 'image') {
@@ -396,12 +456,14 @@ export default class CopyGnomeExtension extends Extension {
                     return;
                 }
                 const data = GLib.base64_encode(u8);
+                const payloads = [makePayload(c.mime, 'base64', data, u8.length)];
                 const rec = this._history.add({
                     id: c.id,
-                    kind: 'image', mime: c.mime, encoding: 'base64',
-                    data,
+                    kind: 'image',
+                    mime: c.mime,
                     bytes: u8.length,
                     preview: `[image ${Math.round(u8.length / 1024)} KB]`,
+                    payloads,
                 });
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=image bytes=${u8.length}`);
             }
@@ -428,7 +490,7 @@ export default class CopyGnomeExtension extends Extension {
         }
     }
 
-    async _restore(rec, targetWindow = null) {
+    async _restore(rec, targetWindow = null, opts = {}) {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return;
@@ -439,22 +501,68 @@ export default class CopyGnomeExtension extends Extension {
             // Self-write filtering lives in the monitor: record what we are about to write
             // (origin 'restore', sourceKind 'memory'), then write. The drain side drops the
             // memory echo by matching this type+value. Back up first so a failed write rolls
-            // back the marker (see docs/features/clipboard-capture/clipboard-capture-design.md).
+            // back the marker (see docs/03-clipboard/capture-pipeline.md).
             const backup = this._monitor.getLastContent();
             const markSelfWrite = (type, value) =>
                 this._monitor.setLastContent({ origin: 'restore', type, value, sourceKind: 'memory', source: '(self-restore)' });
-            const skipWrite = type => {
-                const skip = !!recentTop;
-                if (skip)
+            // pasteMode gates the shortcut to confirmed same-mode restores: a rich record's
+            // own clipboard write is single-MIME (see Clipboard.setContent), so skipping a
+            // write that would actually change mode leaves the clipboard offering the wrong
+            // (or no) target for the new mode. rec.lastPasteMode is only set after a real
+            // write, so the first restore of a rich record always writes for real even inside
+            // the recent-top window; only a second restore in the same mode can skip.
+            const skipWrite = (type, pasteMode = null) => {
+                const modeOk = pasteMode == null ||
+                    (rec.lastPasteMode != null && rec.lastPasteMode === pasteMode);
+                const skip = !!recentTop && modeOk;
+                if (skip) {
                     log.debug(`[restore]: clipboard write skipped recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top row=${recentTop.rowNumber} ageMs=${recentTop.ageMs} windowSec=${recentTop.windowSec}`);
+                } else if (recentTop && pasteMode != null) {
+                    log.debug(`[restore]: clipboard write forced recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top-mode-unconfirmed lastPasteMode=${rec.lastPasteMode ?? '(none)'} pasteMode=${pasteMode}`);
+                }
                 return skip;
             };
-            if (rec.kind === 'image' && rec.data) {
+            if (rec.kind === 'rich') {
+                const rich = richPayload(rec);
+                const plain = plainTextPayload(rec);
+                if (!rich || !plain) {
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=rich reason=missing-payload`);
+                    return;
+                }
+                const mode = this._resolveRichTextMode(targetWindow, opts?.mode);
+                if (mode.mode === 'rich') {
+                    if (skipWrite('rich', 'rich'))
+                        wrote = true;
+                    else {
+                        const comparable = richComparableValue(rich.value, plain.value);
+                        markSelfWrite('rich', comparable);
+                        log.debug(`[restore]: rich clipboard write recordId=${rec.id} mode=rich mime=${rich.mime} richBytes=${rich.bytes} textBytes=${plain.bytes} reason=${mode.reason} match=${mode.match || '(none)'}`);
+                        wrote = Clipboard.setContent(rich.mime, encodeUtf8(rich.value));
+                        if (wrote)
+                            rec.lastPasteMode = 'rich';
+                    }
+                } else {
+                    if (skipWrite('text', 'plain'))
+                        wrote = true;
+                    else {
+                        markSelfWrite('text', plain.value);
+                        log.debug(`[restore]: rich clipboard write recordId=${rec.id} mode=plain bytes=${byteLength(plain.value)} reason=${mode.reason} match=${mode.match || '(none)'} value="${debugValue(plain.value)}"`);
+                        wrote = Clipboard.setText(plain.value);
+                        if (wrote)
+                            rec.lastPasteMode = 'plain';
+                    }
+                }
+            } else if (rec.kind === 'image') {
                 if (!this._config.general.captureImages) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=disabled`);
                     return;
                 }
-                const u8 = GLib.base64_decode(rec.data);
+                const payload = binaryPayload(rec);
+                if (!payload) {
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=missing-payload`);
+                    return;
+                }
+                const u8 = GLib.base64_decode(payload.value);
                 if (!u8) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=invalid-base64`);
                     return;
@@ -462,15 +570,20 @@ export default class CopyGnomeExtension extends Extension {
                 if (skipWrite('image'))
                     wrote = true;
                 else {
-                    markSelfWrite('image', rec.data);
+                    markSelfWrite('image', payload.value);
                     wrote = Clipboard.setContent(rec.mime, u8);
                 }
-            } else if (rec.kind === 'file' && rec.uri) {
+            } else if (rec.kind === 'file') {
                 if (!this._config.general.captureFiles) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=disabled`);
                     return;
                 }
-                const restoreUri = normalizeUriListForRestore(rec.uri);
+                const payload = uriListPayload(rec);
+                if (!payload) {
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=missing-payload`);
+                    return;
+                }
+                const restoreUri = normalizeUriListForRestore(payload.value);
                 const wmClass = this._targetWmClass(targetWindow);
                 const restoreFileUri = this._shouldRestoreFileUri(wmClass);
                 const mode = restoreFileUri ? 'file' : 'path';
@@ -500,16 +613,26 @@ export default class CopyGnomeExtension extends Extension {
                         log.debug(`[restore]: file clipboard write mode=path recordId=${rec.id} bytes=${byteLength(pathText)} uriCount=${uriListCount(restoreUri)} value="${debugValue(pathText)}"`);
                     }
                 }
-            } else if (rec.text != null) {
+            } else if (rec.kind === 'text') {
+                const payload = plainTextPayload(rec);
+                if (!payload) {
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=text reason=missing-payload`);
+                    return;
+                }
                 if (skipWrite('text'))
                     wrote = true;
                 else {
-                    markSelfWrite('text', rec.text);
-                    log.debug(`[restore]: text clipboard write recordId=${rec.id} bytes=${byteLength(rec.text)} value="${debugValue(rec.text)}"`);
-                    wrote = Clipboard.setText(rec.text);
+                    markSelfWrite('text', payload.value);
+                    log.debug(`[restore]: text clipboard write recordId=${rec.id} bytes=${byteLength(payload.value)} value="${debugValue(payload.value)}"`);
+                    wrote = Clipboard.setText(payload.value);
                 }
-            } else if (rec.data) {
-                const u8 = GLib.base64_decode(rec.data);
+            } else {
+                const payload = binaryPayload(rec);
+                if (!payload) {
+                    log.warn(`[restore]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-payload`);
+                    return;
+                }
+                const u8 = GLib.base64_decode(payload.value);
                 if (!u8) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=${rec.kind ?? 'binary'} reason=invalid-base64`);
                     return;
@@ -517,12 +640,9 @@ export default class CopyGnomeExtension extends Extension {
                 if (skipWrite('binary'))
                     wrote = true;
                 else {
-                    markSelfWrite('binary', rec.data);
+                    markSelfWrite('binary', payload.value);
                     wrote = Clipboard.setContent(rec.mime, u8);
                 }
-            } else {
-                log.warn(`[restore]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-payload`);
-                return;
             }
 
             if (!wrote) {
@@ -618,6 +738,26 @@ export default class CopyGnomeExtension extends Extension {
         if (!hay)
             return false;
         return this._matchingConfigSubstring(hay, this._config?.ui?.fileApps ?? []) !== '';
+    }
+
+    _resolveRichTextMode(targetWindow = null, explicitMode = null) {
+        if (explicitMode === 'rich' || explicitMode === 'plain')
+            return { mode: explicitMode, reason: 'explicit', match: '' };
+
+        const wmClass = this._targetWmClass(targetWindow);
+        const hay = String(wmClass ?? '').toLowerCase();
+        if (!hay)
+            return { mode: 'plain', reason: 'no-wm-class', match: '' };
+
+        const plainMatch = this._matchingConfigSubstring(hay, this._config?.ui?.plainTextApps ?? []);
+        if (plainMatch)
+            return { mode: 'plain', reason: 'plainTextApps', match: plainMatch };
+
+        const richMatch = this._matchingConfigSubstring(hay, this._config?.ui?.richTextApps ?? []);
+        if (richMatch)
+            return { mode: 'rich', reason: 'richTextApps', match: richMatch };
+
+        return { mode: 'plain', reason: 'default', match: '' };
     }
 
     _matchingConfigSubstring(wmClass, values) {

@@ -47,6 +47,12 @@ ui:
                                   # seconds, restore/paste it without rewriting clipboard.
   fileApps:                      # lower-case wm_class substrings that receive copied
     - org.gnome.nautilus         # files as text/uri-list; others receive path text
+  richTextApps:                  # rich-text records restore with primary rich MIME for these apps
+    - libreoffice
+    - soffice
+  plainTextApps:                 # wins over richTextApps; restore rich text as text/plain
+    - terminal
+    - org.gnome.console
   defaultPasteKeys:              # used when no pasteKeybindings entry matches
     - ctrl
     - v

@@ -5,8 +5,7 @@ import { log } from './log.js';
 // In-memory MRU model - the single source of truth for the running session.
 //
 // Record shape:
-//   { id, kind, mime, encoding, text|null, data|null, uri|null,
-//     bytes, preview, createdAt, usedAt }
+//   { id, kind, mime, bytes, preview, createdAt, usedAt, payloads }
 //
 // Ordering: usedAt descending. Re-selecting an existing entry (write-back) updates its
 // usedAt -> floats to top; re-copying instead adds a brand-new record at the top.
@@ -55,21 +54,17 @@ export class History {
     }
 
     /**
-     * Add a new entry. `rec` carries content fields already resolved by the caller
-     * (text/data/uri, preview, bytes, kind, mime). If `rec.id` is set (the capture event's
-     * uuid) it becomes the record id, threading event -> record -> logs; otherwise a fresh
-     * uuid is minted. Every call creates a distinct record; identical content is intentionally
-     * not merged. Returns the live record.
+     * Add a new entry. `rec` carries payloads already resolved by the caller. If `rec.id` is
+     * set (the capture event's uuid) it becomes the record id, threading event -> record ->
+     * logs; otherwise a fresh uuid is minted. Every call creates a distinct record; identical
+     * content is intentionally not merged. Returns the live record.
      */
     add(rec) {
         const now = GLib.get_real_time();
         const record = {
             createdAt: now,
             usedAt: now,
-            encoding: rec.data ? 'base64' : 'utf8',
-            text: null,
-            data: null,
-            uri: null,
+            payloads: [],
             ...rec,
             id: rec.id ?? newId(),
         };

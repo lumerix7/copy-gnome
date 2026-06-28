@@ -186,12 +186,12 @@ flowchart TD
 
 ### Truth table
 
-| current sourceKind | type+value == last | last.origin | result                                             |
-|--------------------|--------------------|-------------|----------------------------------------------------|
-| any                | no                 | *           | capture if not a file-path-twin                    |
-| any                | yes                | restore     | **drop** (echo)                                    |
-| memory             | yes                | capture     | **drop** (stale replay)                            |
-| non-memory         | yes                | capture     | **drop** (same-last)                               |
+| current sourceKind | type+value == last | last.origin | result                                                                        |
+|--------------------|--------------------|-------------|-------------------------------------------------------------------------------|
+| any                | no                 | *           | capture if not a file-path-twin                                               |
+| any                | yes                | restore     | **drop** (echo)                                                               |
+| memory             | yes                | capture     | **drop** (stale replay)                                                       |
+| non-memory         | yes                | capture     | **drop** (same-last)                                                          |
 | memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=file` and text equals decoded file path |
 
 ## File copies

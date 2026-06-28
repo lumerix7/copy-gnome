@@ -97,6 +97,13 @@ function validateSnapshot(obj) {
   for (const item of obj.items) {
     if (!item || typeof item.id !== "string" || typeof item.kind !== "string")
       return { ok: false, message: "latest snapshot has invalid item" };
+    if (typeof item.mime !== "string" || !Array.isArray(item.payloads) || item.payloads.length === 0)
+      return { ok: false, message: "latest snapshot has invalid item" };
+    for (const payload of item.payloads) {
+      if (!payload || typeof payload.mime !== "string" || typeof payload.encoding !== "string" ||
+          typeof payload.value !== "string" || typeof payload.bytes !== "number")
+        return { ok: false, message: "latest snapshot has invalid payload" };
+    }
   }
   return { ok: true };
 }

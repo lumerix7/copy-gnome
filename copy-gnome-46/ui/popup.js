@@ -18,6 +18,7 @@ import { log } from '../core/log.js';
 // Always-visible keyboard/mouse cheat sheet shown under the search box. Short, English +
 // symbols. Number-pick feedback temporarily replaces it and restores it when cleared.
 const HINT_TEXT = '↑↓ move · 1-n pick · enter/click paste · ctrl+f search · esc close';
+const SEARCH_HINT_TEXT = '↑↓ move · enter/click paste · type to filter · esc close';
 const DEFAULT_UI = {
     popupWidth: 640,
     popupMaxHeight: 800,
@@ -228,9 +229,10 @@ function ensureActorVisibleInScrollView(scrollView, actor) {
 }
 
 export class Popup {
-    constructor({ getItems, onActivate, onClear, onSave, getUi }) {
+    constructor({ getItems, onActivate, onRemove, onClear, onSave, getUi }) {
         this._getItems = getItems;
         this._onActivate = onActivate;
+        this._onRemove = onRemove ?? (() => {});
         this._onClear = onClear ?? (() => {});
         this._onSave = onSave ?? (() => 'idle');
         this._getUi = getUi ?? (() => null);
@@ -241,6 +243,7 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._itemMenu = null;
         this._dragHandle = null;
         this._grab = null;
         this._rows = [];        // [{rec, button}]
@@ -256,6 +259,7 @@ export class Popup {
         this._saveHintTimer = 0;
         this._drag = null;
         this._moveBounds = null;
+        this._popupTheme = 'dark';
     }
 
     get visible() { return this._visible; }
@@ -284,6 +288,7 @@ export class Popup {
         const edgeMargin = num(ui.popupEdgeMargin, DEFAULT_UI.popupEdgeMargin, 0, 96);
         const opacity = num(ui.popupOpacity, DEFAULT_UI.popupOpacity, 0.1, 1);
         const theme = resolvePopupTheme(ui);
+        this._popupTheme = theme.resolved;
         log.debug(`[popup]: theme configured=${theme.configured} gsettingsColorScheme=${theme.gsettingsColorScheme} shellColorScheme=${theme.shellColorScheme} resolved=${theme.resolved}`);
         const numberPickTimeoutMs = num(
             ui.numberPickTimeoutMs, DEFAULT_UI.numberPickTimeoutMs, 100, 5000);
@@ -384,7 +389,12 @@ export class Popup {
 
         Main.layoutManager.uiGroup.add_child(this._backdrop);
 
-        this._entry.clutter_text.connect('text-changed', () => this._rebuild());
+        this._entry.clutter_text.connect('text-changed', () => {
+            this._rebuild();
+            this._showNumberHint('');
+        });
+        this._entry.clutter_text.connect('key-focus-in', () => this._onSearchFocusIn());
+        this._entry.clutter_text.connect('key-focus-out', () => this._refreshHintSoon());
         this._entry.clutter_text.connect('key-press-event',
             (_ct, event) => this._onKey(event));
         this._backdrop.connect('key-press-event',
@@ -451,6 +461,7 @@ export class Popup {
         this._clearNumberPick();
         this._disarmClear();
         this._clearSaveHint();
+        this._clearItemContextMenu();
         if (this._grab) {
             try {
                 Main.popModal(this._grab);
@@ -472,6 +483,7 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._itemMenu = null;
         this._dragHandle = null;
         this._rows = [];
         this._selected = -1;
@@ -480,6 +492,7 @@ export class Popup {
         this._clearBtn = null;
         this._drag = null;
         this._moveBounds = null;
+        this._popupTheme = 'dark';
         this._visible = false;
     }
 
@@ -495,6 +508,7 @@ export class Popup {
         this._clearNumberPick();
         this._disarmClear();
         this._clearSaveHint();
+        this._clearItemContextMenu();
         if (this._backdrop) {
             try {
                 this._backdrop.destroy();
@@ -508,6 +522,7 @@ export class Popup {
         this._hint = null;
         this._scrollView = null;
         this._listBox = null;
+        this._itemMenu = null;
         this._dragHandle = null;
         this._rows = [];
         this._selected = -1;
@@ -516,6 +531,7 @@ export class Popup {
         this._clearBtn = null;
         this._drag = null;
         this._moveBounds = null;
+        this._popupTheme = 'dark';
         this._visible = false;
     }
 
@@ -605,6 +621,7 @@ export class Popup {
         }
 
         this._disarmClear();
+        this._clearItemContextMenu();
         try {
             this._onClear();
         } catch (e) {
@@ -639,6 +656,7 @@ export class Popup {
         if (!this._entry || !this._listBox)
             return;
         const query = this._entry.get_text();
+        this._clearItemContextMenu();
         this._listBox.destroy_all_children();
         this._rows = [];
 
@@ -685,10 +703,13 @@ export class Popup {
             button.connect('button-press-event', (_actor, event) => {
                 const pointerButton = eventButton(event);
                 if (pointerButton !== Clutter.BUTTON_PRIMARY) {
-                    if (pointerButton === Clutter.BUTTON_SECONDARY)
-                        log.debug(`[popup]: row secondary click ignored; context menu pending recordId=${rec.id ?? '(none)'}`);
+                    if (pointerButton === Clutter.BUTTON_SECONDARY) {
+                        this._select(i);
+                        this._showItemContextMenu(rec, button, event);
+                    }
                     return Clutter.EVENT_STOP;
                 }
+                this._clearItemContextMenu();
                 this._select(i);
                 this._activate(rec);
                 return Clutter.EVENT_STOP;
@@ -698,6 +719,111 @@ export class Popup {
         });
 
         this._select(0);
+    }
+
+    _itemMenuButton(label, action, styleClass = '') {
+        const button = new St.Button({
+            style_class: `cg-item-menu-button${styleClass ? ` ${styleClass}` : ''}`,
+            label,
+            can_focus: false,
+            x_expand: true,
+        });
+        button.connect('button-press-event', (_actor, event) => {
+            if (eventButton(event) !== Clutter.BUTTON_PRIMARY)
+                return Clutter.EVENT_STOP;
+            try {
+                action();
+            } catch (e) {
+                log.warn(`popup item menu action failed: ${e.message}`);
+                this._clearItemContextMenu();
+            }
+            return Clutter.EVENT_STOP;
+        });
+        return button;
+    }
+
+    _showItemContextMenu(rec, rowButton, event) {
+        if (!this._backdrop)
+            return;
+        this._clearNumberPick();
+        this._disarmClear();
+        this._clearItemContextMenu();
+
+        const menu = new St.BoxLayout({
+            vertical: true,
+            style_class: `cg-item-menu cg-item-menu-${this._popupTheme}`,
+            reactive: true,
+            can_focus: false,
+        });
+        menu.add_child(this._itemMenuButton('Paste', () => this._activate(rec)));
+        menu.add_child(this._itemMenuButton('Remove', () => this._removeItem(rec),
+            'cg-item-menu-danger'));
+        this._backdrop.add_child(menu);
+        this._itemMenu = menu;
+
+        this._positionItemContextMenu(menu, rowButton, event);
+        log.debug(`[popup]: item context menu opened recordId=${rec.id ?? '(none)'}`);
+    }
+
+    _positionItemContextMenu(menu, rowButton, event) {
+        const margin = 6;
+        let x = margin;
+        let y = margin;
+        const coords = eventCoords(event);
+
+        try {
+            const [backdropX, backdropY] = this._backdrop.get_transformed_position();
+            if (coords) {
+                x = coords[0] - backdropX;
+                y = coords[1] - backdropY;
+            } else if (rowButton) {
+                const [rowX, rowY] = rowButton.get_transformed_position();
+                const [, rowH] = rowButton.get_transformed_size();
+                x = rowX - backdropX + 12;
+                y = rowY - backdropY + rowH;
+            }
+
+            const [minW, natW] = menu.get_preferred_width(-1);
+            const [minH, natH] = menu.get_preferred_height(natW);
+            const width = Math.max(120, Math.ceil(natW || minW || 120));
+            const height = Math.max(1, Math.ceil(natH || minH || 1));
+            const maxX = Math.max(margin, this._backdrop.width - width - margin);
+            const maxY = Math.max(margin, this._backdrop.height - height - margin);
+            menu.set_width(width);
+            menu.set_position(Math.round(clamp(x, margin, maxX)),
+                Math.round(clamp(y, margin, maxY)));
+        } catch (e) {
+            log.debug(`popup item menu position failed: ${e.message}`);
+            menu.set_position(x, y);
+        }
+    }
+
+    _clearItemContextMenu() {
+        if (!this._itemMenu)
+            return;
+        try {
+            this._itemMenu.destroy();
+        } catch (e) {
+            log.debug(`popup item menu cleanup failed: ${e.message}`);
+        }
+        this._itemMenu = null;
+    }
+
+    _removeItem(rec) {
+        if (!rec?.id) {
+            log.warn('popup item remove skipped: missing record id');
+            this._clearItemContextMenu();
+            return;
+        }
+        const recordId = rec.id;
+        this._clearItemContextMenu();
+        try {
+            this._onRemove(rec);
+            log.debug(`[popup]: item removed recordId=${recordId}`);
+        } catch (e) {
+            log.warn(`popup item remove failed recordId=${recordId}: ${e.message}`);
+        }
+        this._rebuild();
     }
     _select(i) {
         if (i < 0 || i >= this._rows.length) return;
@@ -727,8 +853,31 @@ export class Popup {
             this._hint.add_style_class_name('cg-number-hint-warning');
         else
             this._hint.remove_style_class_name('cg-number-hint-warning');
-        this._hint.set_text(text === '' ? HINT_TEXT : text);
+        this._hint.set_text(text === '' ? this._defaultHintText() : text);
         this._hint.visible = true;
+    }
+
+    _defaultHintText() {
+        return this._isSearchMode() ? SEARCH_HINT_TEXT : HINT_TEXT;
+    }
+
+    _isSearchMode() {
+        if (!this._entry)
+            return false;
+        return global.stage.get_key_focus() === this._entry.clutter_text ||
+            this._entry.get_text() !== '';
+    }
+
+    _onSearchFocusIn() {
+        this._clearNumberPick();
+        this._showNumberHint('');
+    }
+
+    _refreshHintSoon() {
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._showNumberHint('');
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _activateRow(i) {
@@ -740,6 +889,7 @@ export class Popup {
 
     _activate(rec) {
         const targetWindow = this._targetWindow;
+        this._clearItemContextMenu();
         this.hide('activate');
         this._onActivate(rec, targetWindow);
     }
@@ -904,6 +1054,7 @@ export class Popup {
             return;
         this._clearNumberPick();
         global.stage.set_key_focus(this._entry.clutter_text);
+        this._showNumberHint('');
     }
 
     _onKey(event) {
@@ -976,6 +1127,11 @@ export class Popup {
 
     _onBackdropPress(event) {
         const source = event.get_source();
+        if (actorContains(this._itemMenu, source))
+            return Clutter.EVENT_PROPAGATE;
+        if (eventInsideActor(this._itemMenu, event))
+            return Clutter.EVENT_STOP;
+        this._clearItemContextMenu();
         if (actorContains(this._panel, source))
             return Clutter.EVENT_PROPAGATE;
         if (eventInsideActor(this._panel, event))

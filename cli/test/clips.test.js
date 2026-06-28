@@ -12,6 +12,18 @@ import {
   repairLatestClip,
 } from "../src/lib/clips.js";
 
+const textItem = id => ({
+  id,
+  kind: "text",
+  mime: "text/plain;charset=utf-8",
+  bytes: 5,
+  preview: "hello",
+  createdAt: 1,
+  usedAt: 1,
+  payloads: [
+    { mime: "text/plain;charset=utf-8", encoding: "utf8", value: "hello", bytes: 5 },
+  ],
+});
 const snap = (items = []) => JSON.stringify({ type: "history", version: 1, items });
 
 function dataDir() {
@@ -21,8 +33,8 @@ function dataDir() {
 test("listClipFiles filters to clips-*.jsonl and sorts by date", () => {
   const dir = dataDir();
   try {
-    fs.writeFileSync(path.join(dir, "clips-20260629.jsonl"), `${snap([{ id: "a", kind: "text" }])}\n`, "utf8");
-    fs.writeFileSync(path.join(dir, "clips-20260630.jsonl"), `${snap([{ id: "b", kind: "text" }])}\n`, "utf8");
+    fs.writeFileSync(path.join(dir, "clips-20260629.jsonl"), `${snap([textItem("a")])}\n`, "utf8");
+    fs.writeFileSync(path.join(dir, "clips-20260630.jsonl"), `${snap([textItem("b")])}\n`, "utf8");
     fs.writeFileSync(path.join(dir, "other.txt"), "nope\n", "utf8");
     const names = listClipFiles(dir).map(f => path.basename(f));
     assert.deepEqual(names, ["clips-20260629.jsonl", "clips-20260630.jsonl"]);
@@ -62,7 +74,7 @@ test("inspectClipFile: valid latest line is ok with item count", () => {
   const dir = dataDir();
   const f = path.join(dir, "clips-20260630.jsonl");
   try {
-    fs.writeFileSync(f, `${snap([{ id: "a", kind: "text" }])}\n${snap([{ id: "b", kind: "text" }])}\n`, "utf8");
+    fs.writeFileSync(f, `${snap([textItem("a")])}\n${snap([textItem("b")])}\n`, "utf8");
     const r = inspectClipFile(f);
     assert.equal(r.ok, true);
     assert.equal(r.exists, true);
@@ -113,7 +125,7 @@ test("repairLatestClip: no file -> ok and unchanged", () => {
 test("repairLatestClip: valid file -> no repair needed", () => {
   const dir = dataDir();
   try {
-    fs.writeFileSync(path.join(dir, "clips-20260630.jsonl"), `${snap([{ id: "a", kind: "text" }])}\n`, "utf8");
+    fs.writeFileSync(path.join(dir, "clips-20260630.jsonl"), `${snap([textItem("a")])}\n`, "utf8");
     const r = repairLatestClip(dir);
     assert.equal(r.ok, true);
     assert.equal(r.changed, false);
@@ -126,7 +138,7 @@ test("repairLatestClip: valid file -> no repair needed", () => {
 test("repairLatestClip dry-run plans but does not modify the file", () => {
   const dir = dataDir();
   const f = path.join(dir, "clips-20260630.jsonl");
-  const valid = snap([{ id: "a", kind: "text" }]);
+  const valid = snap([textItem("a")]);
   const garbage = `{"type":"history","version":1,"items":[{"id":"c`;
   try {
     fs.writeFileSync(f, `${valid}\n${garbage}`, "utf8");
@@ -145,8 +157,8 @@ test("repairLatestClip dry-run plans but does not modify the file", () => {
 test("repairLatestClip --yes backs up, truncates the bad line, and restores health", () => {
   const dir = dataDir();
   const f = path.join(dir, "clips-20260630.jsonl");
-  const line1 = snap([{ id: "a", kind: "text" }]);
-  const line2 = snap([{ id: "b", kind: "text" }]);
+  const line1 = snap([textItem("a")]);
+  const line2 = snap([textItem("b")]);
   const garbage = `{"type":"history","version":1,"items":[{"id":"c`;
   try {
     fs.writeFileSync(f, `${line1}\n${line2}\n${garbage}`, "utf8");

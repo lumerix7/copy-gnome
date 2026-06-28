@@ -1,4 +1,4 @@
-# 13 - Troubleshooting
+# 99 - Troubleshooting
 
 ## `Window manager warning: Overwriting existing binding...`
 

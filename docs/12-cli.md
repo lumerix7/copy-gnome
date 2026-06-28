@@ -70,7 +70,8 @@ which then takes precedence. These commands do not import extension runtime code
 GNOME Shell to reload settings.
 
 Known GNOME Shell log noise, including Ubuntu Dock keybinding warnings, is documented in
-[13-troubleshooting](13-troubleshooting.md).
+[99-troubleshooting](99-troubleshooting.md).
+
 
 ## IPC choice: DBus vs unix socket (decide-later)
 
@@ -88,6 +89,7 @@ channel into the extension. Two viable options - this is **not locked in**:
 > protocol** for *input events* - a different plane from *control IPC*. (IBus/Fcitx5
 > still use DBus for their control surfaces.) So that shift doesn't argue against DBus for
 > our control channel; both DBus and a unix socket remain fine here.
+
 
 ### Decision: DBus default, behind a swappable `IpcTransport`
 
@@ -109,6 +111,7 @@ after a crash, `EADDRINUSE`, manual message framing, you must hand-write the cli
 is less code and self-documenting. Swappability - not transport choice - is what keeps us
 safe if requirements change. CLI is post-MVP, so this blocks nothing now.
 
+
 ## Recommendation: yes - a thin CLI over the control channel
 
 A CLI is genuinely useful for a clipboard manager (CopyQ ships `copyq` for exactly this:
@@ -125,6 +128,7 @@ adds zero new storage path.
   unexports in `disable()`. When the extension is disabled, the CLI gets a clear
   "service not available - is the extension enabled?" error.
 - No new daemon: the service lives and dies with the extension.
+
 
 ## CLI surface (proposed)
 
@@ -166,6 +170,7 @@ copy-gnome config set storage.binaryMaxBytes 1048576          # 1 MiB raw image/
 - `doctor` is the first recovery/debug command to implement because it must still work
   when the extension's own DBus service is unavailable.
 
+
 ## Doctor command
 
 `copy-gnome doctor` is a local diagnostic command, not a repair tool by default. It should
@@ -175,6 +180,7 @@ found. `--json` emits the same checks as structured data for bug reports and scr
 Design rule: **offline checks must not call the extension DBus service**. A broken Shell
 extension often means the DBus service is absent, so `doctor` must still be useful from a
 terminal.
+
 
 ### Example output
 
@@ -205,6 +211,7 @@ Logs (--since 30m)
 
 Result: ok
 ```
+
 
 ### Checks
 
@@ -240,16 +247,17 @@ Online checks, only when the extension service is reachable:
 - `ShowPopup` can be skipped by default; make it explicit with `doctor --interactive` so
   diagnostics do not unexpectedly grab the keyboard.
 
+
 ### Severity
 
 Each check returns one of:
 
-| Severity | Meaning |
-|---|---|
-| `ok` | Expected state. |
-| `info` | Useful context, not a problem. |
-| `warn` | Suspicious or risky, but not known broken. |
-| `fail` | Known broken or unsafe enough that the CLI exits `1`. |
+| Severity | Meaning                                               |
+|----------|-------------------------------------------------------|
+| `ok`     | Expected state.                                       |
+| `info`   | Useful context, not a problem.                        |
+| `warn`   | Suspicious or risky, but not known broken.            |
+| `fail`   | Known broken or unsafe enough that the CLI exits `1`. |
 
 Rules of thumb:
 
@@ -260,6 +268,7 @@ Rules of thumb:
   opt-in and riskier inside GNOME Shell.
 - Recent `signal 11` in `gnome-shell` is `fail` if logs mention copy-gnome, otherwise
   `warn` with surrounding context.
+
 
 ### JSON shape
 
@@ -282,6 +291,7 @@ Rules of thumb:
 }
 ```
 
+
 ### Subcommands and options
 
 ```text
@@ -296,6 +306,7 @@ copy-gnome doctor env                    # versions, paths, keybindings, config 
 
 Keep `doctor` read-only. Any future repair action must be explicit, e.g.
 `copy-gnome repair disable-risky-capture` or `copy-gnome disable`.
+
 
 ## DBus method sketch
 
@@ -321,13 +332,14 @@ Keep `doctor` read-only. Any future repair action must be explicit, e.g.
 </interface>
 ```
 
+
 ## Implementation notes
 
 - The CLI itself can be a **small GJS script** (uses `Gio.DBusProxy`, no extra deps) or a
   POSIX `sh` wrapper around `gdbus call`. Prefer the GJS script for clean JSON + binary
   handling; ship it in `scripts/` and symlink to `~/.local/bin/copy-gnome` at install.
 - For binary content over DBus, pass `ay` (byte array) decoded from the clip's capped
-  inline base64 payload. Oversized non-file binary payloads are not persisted in v1.
+  inline base64 payload. Oversized non-file binary payloads are skipped before persistence.
 - Security: session bus is per-user already; no extra auth needed. Don't expose anything
   that bypasses the privacy rules (`Copy` still goes through the normal capture
   pipeline so excludes apply).
@@ -345,6 +357,7 @@ Keep `doctor` read-only. Any future repair action must be explicit, e.g.
   ```
 
   This gives a reliable terminal recovery path even when the in-Shell IPC layer is down.
+
 
 ## Scope
 

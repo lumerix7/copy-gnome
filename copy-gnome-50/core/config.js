@@ -46,6 +46,10 @@ export const DEFAULTS = {
         // wm_class substrings that should receive copied files as text/uri-list.
         // All other apps receive the decoded file path as text/plain.
         fileApps: ['org.gnome.nautilus'],
+        // Rich-text records default to plain restore. Matching richTextApps receive the primary
+        // rich MIME; matching plainTextApps always receive text/plain and win over richTextApps.
+        richTextApps: ['libreoffice', 'soffice'],
+        plainTextApps: ['terminal', 'org.gnome.console'],
         // Default paste keys. Empty list restores clipboard without injecting a keystroke.
         defaultPasteKeys: ['ctrl', 'v'],
         // App-specific paste keys checked before defaultPasteKeys. Each entry:
@@ -190,6 +194,8 @@ function sanitizeConfig(cfg) {
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
     cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
     cfg.ui.fileApps = lowerStringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
+    cfg.ui.richTextApps = lowerStringList(cfg.ui.richTextApps, DEFAULTS.ui.richTextApps);
+    cfg.ui.plainTextApps = lowerStringList(cfg.ui.plainTextApps, DEFAULTS.ui.plainTextApps);
     cfg.ui.defaultPasteKeys = pasteKeys(cfg.ui.defaultPasteKeys, DEFAULTS.ui.defaultPasteKeys, 'ui.defaultPasteKeys');
     cfg.ui.pasteKeybindings = pasteKeybindings(cfg.ui.pasteKeybindings);
 

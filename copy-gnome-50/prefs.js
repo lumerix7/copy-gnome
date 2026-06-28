@@ -543,6 +543,12 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         paste.add(this._listRow('fileApps', 'File-target apps',
             'wm_class substrings that receive copied files as text/uri-list; others receive paths.',
             'ui'));
+        paste.add(this._listRow('richTextApps', 'Rich-text apps',
+            'wm_class substrings that receive HTML when restoring rich-text records.',
+            'ui'));
+        paste.add(this._listRow('plainTextApps', 'Plain-text apps',
+            'wm_class substrings that always receive plain text for rich-text records.',
+            'ui'));
         paste.add(this._listRow('defaultPasteKeys', 'Default paste keys',
             'Comma-separated key tokens, such as ctrl, v. Empty restores clipboard only.',
             'ui'));

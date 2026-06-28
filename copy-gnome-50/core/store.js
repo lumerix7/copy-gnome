@@ -2,8 +2,19 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import { log } from './log.js';
+import {
+    PLAIN_TEXT_MIME,
+    RICH_TEXT_MIMES,
+    URI_LIST_MIME,
+    binaryPayload,
+    payloadBytesTotal,
+    plainTextPayload,
+    primaryPayload,
+    richPayload,
+    uriListPayload,
+} from './payloads.js';
 
-// Append-only daily JSONL store. See docs/04-storage.md.
+// Append-only daily JSONL store. See docs/04-storage/README.md.
 //
 // Layout under <dataDir>:
 //   clips-YYYYMMDD.jsonl   append-only, one full sorted history snapshot per line
@@ -74,40 +85,90 @@ function clipPath(dir, name) {
     return GLib.build_filenamev([dir, name]);
 }
 
+function normalizePayload(obj) {
+    if (!obj || typeof obj !== 'object')
+        return null;
+    if (typeof obj.mime !== 'string' || obj.mime.length === 0)
+        return null;
+    if (!['utf8', 'uri-list', 'base64'].includes(obj.encoding))
+        return null;
+    if (typeof obj.value !== 'string')
+        return null;
+    if (typeof obj.bytes !== 'number' || obj.bytes < 0)
+        return null;
+    return {
+        mime: obj.mime,
+        encoding: obj.encoding,
+        value: obj.value,
+        bytes: obj.bytes,
+    };
+}
+
+function normalizePayloads(value) {
+    if (!Array.isArray(value) || value.length === 0 || value.length > 8)
+        return null;
+    const out = [];
+    for (const item of value) {
+        const payload = normalizePayload(item);
+        if (!payload)
+            return null;
+        out.push(payload);
+    }
+    return out;
+}
+
+function validKindPayloads(rec) {
+    const primary = primaryPayload(rec);
+    if (!primary || rec.mime !== primary.mime)
+        return false;
+    if (rec.kind === 'text')
+        return !!plainTextPayload(rec);
+    if (rec.kind === 'rich')
+        return !!richPayload(rec) && !!plainTextPayload(rec);
+    if (rec.kind === 'file')
+        return primary.mime === URI_LIST_MIME && primary.encoding === 'uri-list' &&
+            !!uriListPayload(rec);
+    if (rec.kind === 'image' || rec.kind === 'binary')
+        return primary.encoding === 'base64' && !!binaryPayload(rec);
+    return false;
+}
+
 function normalizeRecord(obj, maxLineBytes) {
     if (!obj || typeof obj !== 'object')
         return null;
     if (typeof obj.id !== 'string')
         return null;
-    if (!['text', 'html', 'file', 'image', 'binary'].includes(obj.kind))
+    if (!['text', 'rich', 'file', 'image', 'binary'].includes(obj.kind))
         return null;
-    if (typeof obj.mime !== 'string' || typeof obj.encoding !== 'string')
+    if (typeof obj.mime !== 'string')
         return null;
     if (typeof obj.bytes !== 'number' || obj.bytes < 0)
         return null;
     if (typeof obj.createdAt !== 'number' || typeof obj.usedAt !== 'number')
+        return null;
+    const payloads = normalizePayloads(obj.payloads);
+    if (!payloads)
         return null;
 
     const rec = {
         id: obj.id,
         kind: obj.kind,
         mime: obj.mime,
-        encoding: obj.encoding,
-        text: typeof obj.text === 'string' ? obj.text : null,
-        data: typeof obj.data === 'string' ? obj.data : null,
-        uri: typeof obj.uri === 'string' ? obj.uri : null,
         bytes: obj.bytes,
         preview: typeof obj.preview === 'string' ? obj.preview : '',
         createdAt: obj.createdAt,
         usedAt: obj.usedAt,
+        payloads,
     };
 
-    if (rec.kind === 'file' && !rec.uri)
+    if (!validKindPayloads(rec))
         return null;
-    if ((rec.kind === 'text' || rec.kind === 'html') && rec.text == null)
+    if (rec.kind === 'text' && rec.mime !== PLAIN_TEXT_MIME && !rec.mime.startsWith('text/plain'))
         return null;
-    if ((rec.kind === 'image' || rec.kind === 'binary') && rec.data == null)
+    if (rec.kind === 'rich' && !RICH_TEXT_MIMES.includes(rec.mime))
         return null;
+    if (payloadBytesTotal(rec.payloads) > rec.bytes)
+        log.debug(`[store]: record bytes lower than payload sum id=${rec.id} bytes=${rec.bytes} payloadBytes=${payloadBytesTotal(rec.payloads)}`);
 
     // Avoid accepting a line that can never be written back under current caps.
     const approx = JSON.stringify(rec).length;
@@ -297,14 +358,16 @@ export class Store {
             id: rec.id,
             kind: rec.kind,
             mime: rec.mime,
-            encoding: rec.encoding ?? (rec.data ? 'base64' : 'utf8'),
-            text: rec.text ?? null,
-            data: rec.data ?? null,
-            uri: rec.uri ?? null,
             bytes: rec.bytes ?? 0,
             preview: rec.preview ?? '',
             createdAt: rec.createdAt,
             usedAt: rec.usedAt,
+            payloads: Array.isArray(rec.payloads) ? rec.payloads.map(p => ({
+                mime: p.mime,
+                encoding: p.encoding,
+                value: p.value,
+                bytes: p.bytes,
+            })) : [],
         };
     }
 

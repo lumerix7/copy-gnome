@@ -1,8 +1,10 @@
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import St from 'gi://St';
 
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { log } from '../core/log.js';
 
@@ -10,25 +12,44 @@ import { log } from '../core/log.js';
 // opens the SAME history widget as the global shortcut - see ui/popup.js. The only
 // difference between the two is placement: the shortcut centers it, the indicator anchors
 // it under this icon. Styling, opacity, search, number quick-paste, clear, and all keyboard
-// logic are identical (one widget, two callers). Secondary click is reserved for a future
-// context menu.
-//
-// We pass dontCreateMenu=true so PanelMenu.Button installs a no-op PopupDummyMenu instead of
-// a real (empty) dropdown: that makes a stray empty menu box impossible via pointer,
-// keyboard, or the panel's hover-switch menuManager.
+// logic are identical (one widget, two callers). Secondary click opens a small context menu.
+
+class ConfirmMenuItem extends PopupMenu.PopupMenuItem {
+    static {
+        GObject.registerClass(this);
+    }
+
+    constructor(label, onActivate) {
+        super(label);
+        this._onActivate = onActivate;
+    }
+
+    activate(event) {
+        this._onActivate?.(event);
+    }
+}
 
 export const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
-    _init({ onOpen }) {
-        super._init(0.0, 'copy-gnome', true);
+    _init({ onOpen, onShow, onClear }) {
+        super._init(0.0, 'copy-gnome');
 
         this._onOpen = onOpen;
+        this._onShow = onShow ?? onOpen;
+        this._onClear = onClear ?? (() => {});
+        this._clearArmed = false;
+        this._clearConfirmTimer = 0;
+        this._clearItem = null;
 
         this._icon = new St.Icon({
             icon_name: 'edit-paste-symbolic',
             style_class: 'system-status-icon',
         });
         this.add_child(this._icon);
+
+        this.menu.addAction('Show', () => this._show());
+        this._clearItem = new ConfirmMenuItem('Clear history', event => this._onClearMenu(event));
+        this.menu.addMenuItem(this._clearItem);
 
         // Keyboard activation (Top Bar navigation → Enter/Space) opens the popup too.
         this.connect('key-press-event', (_actor, event) => {
@@ -40,15 +61,28 @@ class Indicator extends PanelMenu.Button {
             }
             return Clutter.EVENT_PROPAGATE;
         });
+        this.connect('destroy', () => this._disarmClear());
     }
 
     _open() {
         const targetWindow =
             global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
         try {
+            this.menu?.close?.();
             this._onOpen?.(this, targetWindow);
         } catch (e) {
             log.warn(`indicator open failed: ${e.message}`);
+        }
+    }
+
+    _show() {
+        const targetWindow =
+            global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
+        try {
+            this.menu?.close?.();
+            this._onShow?.(this, targetWindow);
+        } catch (e) {
+            log.warn(`indicator show failed: ${e.message}`);
         }
     }
 
@@ -61,12 +95,69 @@ class Indicator extends PanelMenu.Button {
         }
     }
 
+    _onClearMenu(_event) {
+        if (!this._clearArmed) {
+            this._clearArmed = true;
+            if (this._clearItem)
+                this._clearItem.label.text = 'Click again to clear all';
+            if (this._clearConfirmTimer) {
+                try {
+                    GLib.Source.remove(this._clearConfirmTimer);
+                } catch (e) {
+                    log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
+                }
+            }
+            this._clearConfirmTimer = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT, 3000, () => {
+                    this._clearConfirmTimer = 0;
+                    this._disarmClear();
+                    log.debug('[indicator]: clear history confirmation expired');
+                    return GLib.SOURCE_REMOVE;
+                });
+            log.debug('[indicator]: clear history armed from context menu');
+            return;
+        }
+
+        this._disarmClear();
+        try {
+            this._onClear();
+            log.debug('[indicator]: clear history confirmed from context menu');
+        } catch (e) {
+            log.warn(`indicator clear failed: ${e.message}`);
+        }
+        this.menu?.close?.();
+    }
+
+    _toggleMenu() {
+        try {
+            this._disarmClear();
+            this.menu?.toggle?.();
+            log.debug('[indicator]: context menu toggled from secondary click');
+        } catch (e) {
+            log.warn(`indicator context menu failed: ${e.message}`);
+        }
+    }
+
+    _disarmClear() {
+        this._clearArmed = false;
+        if (this._clearConfirmTimer) {
+            try {
+                GLib.Source.remove(this._clearConfirmTimer);
+            } catch (e) {
+                log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
+            }
+            this._clearConfirmTimer = 0;
+        }
+        if (this._clearItem)
+            this._clearItem.label.text = 'Clear history';
+    }
+
     vfunc_button_press_event(event) {
         const pointerButton = this._eventButton(event);
         if (pointerButton === Clutter.BUTTON_PRIMARY)
             this._open();
         else if (pointerButton === Clutter.BUTTON_SECONDARY)
-            log.debug('[indicator]: secondary click ignored; context menu pending');
+            this._toggleMenu();
         return Clutter.EVENT_STOP;
     }
 

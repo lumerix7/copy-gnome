@@ -41,6 +41,8 @@ export const DEFAULTS = {
     pasteRestoresFocus: true,
     skipClipboardWriteForRecentTopSec: 3,
     fileApps: ["org.gnome.nautilus"],
+    richTextApps: ["libreoffice", "soffice"],
+    plainTextApps: ["terminal", "org.gnome.console"],
     defaultPasteKeys: ["ctrl", "v"],
     pasteKeybindings: [{ keys: ["ctrl", "shift", "v"], apps: ["terminal"] }],
   },
@@ -102,6 +104,8 @@ export const CONFIG_KEYS = [
   "ui.pasteRestoresFocus",
   "ui.skipClipboardWriteForRecentTopSec",
   "ui.fileApps",
+  "ui.richTextApps",
+  "ui.plainTextApps",
   "ui.defaultPasteKeys",
   "ui.pasteKeybindings",
   "logging.level",
@@ -209,6 +213,8 @@ function sanitizeConfig(config, warnings) {
   config.privacy.secretMimes = stringList(config.privacy.secretMimes, []);
   config.general.allowMemoryMimes = stringList(config.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
   config.ui.fileApps = lowerStringList(config.ui.fileApps, DEFAULTS.ui.fileApps);
+  config.ui.richTextApps = lowerStringList(config.ui.richTextApps, DEFAULTS.ui.richTextApps);
+  config.ui.plainTextApps = lowerStringList(config.ui.plainTextApps, DEFAULTS.ui.plainTextApps);
   config.ui.defaultPasteKeys = pasteKeys(config.ui.defaultPasteKeys, DEFAULTS.ui.defaultPasteKeys, "ui.defaultPasteKeys", warnings);
   config.ui.pasteKeybindings = pasteKeybindings(config.ui.pasteKeybindings, warnings);
   return config;

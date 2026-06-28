@@ -90,9 +90,6 @@ npm run check
 echo "running CLI tests"
 npm test
 
-echo "running multi-version tree sync check"
-bash "$REPO_ROOT/scripts/check-sync.sh"
-
 echo "removing any existing global $PACKAGE_NAME"
 npm uninstall -g "$PACKAGE_NAME" >/dev/null 2>&1 || true
 

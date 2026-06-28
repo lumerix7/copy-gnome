@@ -52,39 +52,41 @@ internal 64 MiB cap, the store keeps the most-recent prefix that fits and syncs 
 running history to that persisted subset.
 
 
-## Record schema
+## Record Schema
 
-Every persisted record is normalized to this shape:
+The in-memory record shape and persisted record shape should match. All actual clipboard
+payload values live in `payloads`; top-level fields are metadata only.
 
 ```json
 {
   "id": "18334709-577d-4973-9a82-0d867d2216bf",
   "kind": "text",
   "mime": "text/plain;charset=utf-8",
-  "encoding": "utf8",
-  "text": "06-history-model.md",
-  "data": null,
-  "uri": null,
   "bytes": 19,
   "preview": "06-history-model.md",
   "createdAt": 1782734910223125,
-  "usedAt": 1782734910223125
+  "usedAt": 1782734910223125,
+  "payloads": [
+    {
+      "mime": "text/plain;charset=utf-8",
+      "encoding": "utf8",
+      "value": "06-history-model.md",
+      "bytes": 19
+    }
+  ]
 }
 ```
 
-| field       | persisted | meaning |
-|-------------|-----------|---------|
+| field       | persisted | meaning                                                  |
+|-------------|-----------|----------------------------------------------------------|
 | `id`        | yes       | record uuid; monitor capture id is reused when available |
-| `kind`      | yes       | `text`, `file`, `image`, and loader-tolerated `html` / `binary` |
-| `mime`      | yes       | MIME used for restore/readback |
-| `encoding`  | yes       | `utf8`, `base64`, or `uri` |
-| `text`      | yes       | text payload, otherwise `null` |
-| `data`      | yes       | base64 payload for image/binary, otherwise `null` |
-| `uri`       | yes       | uri-list payload for copied files, otherwise `null` |
-| `bytes`     | yes       | payload size used for caps and display |
-| `preview`   | yes       | UI/search preview string |
-| `createdAt` | yes       | first insert time from `GLib.get_real_time()` |
-| `usedAt`    | yes       | MRU time from `GLib.get_real_time()` |
+| `kind`      | yes       | `text`, `rich`, `file`, `image`, or `binary`             |
+| `mime`      | yes       | primary MIME; normally `payloads[0].mime`                |
+| `bytes`     | yes       | sum of persisted payload raw byte counts                 |
+| `preview`   | yes       | UI/search preview string                                 |
+| `createdAt` | yes       | first insert time from `GLib.get_real_time()`            |
+| `usedAt`    | yes       | MRU time from `GLib.get_real_time()`                     |
+| `payloads`  | yes       | one or more payload entries; primary payload first       |
 
 These fields are not persisted:
 
@@ -92,17 +94,21 @@ These fields are not persisted:
 - old file-twin process fields: `fileTwinUriList`, `synthesizedFilePath`
 - monitor state: `_lastContent`
 - content identity fields: hash, digest, dedup key
+- old single-payload fields: `text`, `data`, `uri`, `encoding`
+- restore bookkeeping: `lastPasteMode` (`kind=rich` only; tracks which mode was last
+  actually written so the [recent top restore shortcut](03-clipboard/README.md#recent-top-restore-shortcut)
+  only skips a write when the requested mode is unchanged)
 
 
 ## Kind payloads
 
-| kind     | payload field | encoding | restore behavior |
-|----------|---------------|----------|------------------|
-| `text`   | `text`        | `utf8`   | `Clipboard.setText(text)` |
-| `file`   | `uri`         | `uri`    | file targets receive `Clipboard.setContent('x-special/gnome-copied-files', copy + uri bytes)`; other targets receive path text |
-| `image`  | `data`        | `base64` | base64 decode, then `Clipboard.setContent(mime, bytes)` |
-| `binary` | `data`        | `base64` | base64 decode, then `Clipboard.setContent(mime, bytes)` |
-| `html`   | `text`        | `utf8`   | loader accepts it; current capture path stores plain text |
+| kind     | primary payload                                                                                                         | restore behavior                                                                                                                           |
+|----------|-------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `text`   | `text/plain;charset=utf-8`, `encoding=utf8`                                                                             | `Clipboard.setText(value)`                                                                                                                 |
+| `rich`   | primary rich text MIME (`text/html`, `text/rtf`, `text/richtext`, or `text/markdown`), plus plain text fallback payload | plain mode writes fallback text; rich mode currently writes the primary rich MIME as one MIME, with multi-MIME restore left as a follow-up |
+| `file`   | `text/uri-list`, `encoding=uri-list`                                                                                    | file targets receive `x-special/gnome-copied-files`; other targets receive decoded path text                                               |
+| `image`  | image MIME, `encoding=base64`                                                                                           | base64 decode, then `Clipboard.setContent(mime, bytes)`                                                                                    |
+| `binary` | binary MIME, `encoding=base64`                                                                                          | base64 decode, then `Clipboard.setContent(mime, bytes)`                                                                                    |
 
 File records store URI/path references only. They do not store file bytes.
 
@@ -111,12 +117,12 @@ File records store URI/path references only. They do not store file bytes.
 
 A copied file is represented as one ordinary record:
 
-- `kind=file`: the `text/uri-list` payload in `uri`
+- `kind=file`: the `text/uri-list` payload in `payloads[0].value`
 
 No path twin record is created. On restore, the extension either writes GNOME's file-copy
 MIME (`x-special/gnome-copied-files`) or decodes the URI list to path text, depending on
 target app config. See
-[file-twin-design](features/clipboard-capture/file-twin-design.md).
+[file-twin-design](03-clipboard/file-twin-design.md).
 
 
 ## Eviction and caps
@@ -128,13 +134,13 @@ target app config. See
 - `history.maxAgeDays` is a disk-retention policy, not an in-memory eviction: a periodic
   sweep deletes daily `clips-*.jsonl` files older than N days (default 3, 0 = disabled). It
   never touches the in-memory model - an old record stays in the popup as long as it remains
-  within `maxItems`. See [04-storage](04-storage.md#cleanup).
+  within `maxItems`. See [04-storage](04-storage/cleanup-and-limits.md#cleanup).
 - The store has an additional 64 MiB hard cap per snapshot line.
 
 
 ## Load behavior
 
 Startup reads the newest available `clips-YYYYMMDD.jsonl` file and parses only the final
-snapshot line. If the line is missing, corrupt, invalid, or oversized, history starts empty.
-Older lines are left on disk for future repair tooling; the Shell extension does not scan
-backwards to repair during startup.
+snapshot line. If the line is missing, corrupt, invalid, oversized, or not schema
+`version:1`, history starts empty. Older lines are left on disk for future repair tooling;
+the Shell extension does not scan backwards to repair or migrate during startup.

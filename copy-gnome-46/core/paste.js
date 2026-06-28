@@ -3,7 +3,7 @@ import Clutter from 'gi://Clutter';
 import { log } from './log.js';
 
 // Synthesize paste keystrokes from inside the compositor via a Clutter virtual device.
-// Allowed on Wayland because we run in gnome-shell. See docs/03-clipboard.md.
+// Allowed on Wayland because we run in gnome-shell. See docs/03-clipboard/README.md.
 //
 // Time arg to notify_keyval is in MICROSECONDS - the shell's own OSK uses
 // `Clutter.get_current_event_time() * 1000` (keyboard.js).
@@ -109,7 +109,7 @@ function injectKeys(keys, prefix) {
 // Inject configured paste keys. Wayland has no semantic "paste", so the keybinding is
 // per-app. Restore normally prepares the clipboard first; the recent row-1 shortcut may
 // skip only that write while leaving paste injection unchanged.
-// See docs/03-clipboard.md.
+// See docs/03-clipboard/README.md.
 export function paste(keys, context = '[paste]') {
     const prefix = context ? `${context}: ` : '[paste]: ';
     log.debug(`${prefix}paste injection keys=${keysLabel(keys) || '(none)'}`);
