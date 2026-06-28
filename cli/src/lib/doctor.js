@@ -26,7 +26,9 @@ export function runDoctor(opts = {}) {
   add(checks, "extension.installed", status.extension.installed ? "ok" : "fail",
     status.extension.installed ? `Installed at ${status.extension.dir}` : `Missing install dir: ${status.extension.dir}`);
   add(checks, "extension.info", status.extension.infoOk ? "ok" : "warn",
-    status.extension.infoOk ? extensionSummary(status) : `gnome-extensions info failed: ${status.extension.infoError}`);
+    status.extension.infoOk
+      ? extensionSummary(status)
+      : shellDiscoveryHint(status));
 
   const state = String(status.extension.info?.state || "").trim().toUpperCase();
   const active = state === "ACTIVE";
@@ -97,4 +99,13 @@ function extensionSummary(status) {
   const state = status.extension.info?.state || "unknown";
   const version = status.extension.metadata?.["version-name"] || status.extension.metadata?.version || "?";
   return `State: ${state}; version: ${version}`;
+}
+
+function shellDiscoveryHint(status) {
+  const base = `gnome-extensions info failed: ${status.extension.infoError}`;
+  if (!status.extension.installed)
+    return base;
+  if (status.session === "wayland")
+    return `${base}; installed files exist, but current GNOME Shell may need logout/login to discover local extension installs`;
+  return `${base}; installed files exist, but current GNOME Shell does not list the extension`;
 }

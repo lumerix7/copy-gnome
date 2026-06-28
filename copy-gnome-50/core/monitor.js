@@ -38,12 +38,15 @@ function textMime(mimes) {
 }
 
 function debugText(text) {
-    return text
-        .slice(0, DEBUG_TEXT_CHARS)
+    const value = String(text ?? '');
+    const shown = value.length <= DEBUG_TEXT_CHARS
+        ? value
+        : `${value.slice(0, Math.floor(DEBUG_TEXT_CHARS * 0.6))}...${value.slice(-(DEBUG_TEXT_CHARS - Math.floor(DEBUG_TEXT_CHARS * 0.6)))}`;
+    return shown
         .replace(/\\/g, '\\\\')
         .replace(/\n/g, '\\n')
         .replace(/\r/g, '\\r')
-        .replace(/\t/g, '\\t') + (text.length > DEBUG_TEXT_CHARS ? '...' : '');
+        .replace(/\t/g, '\\t');
 }
 
 function debugContent(type, value) {
@@ -60,6 +63,14 @@ function debugSource(source) {
     } catch (e) {
         return '(source)';
     }
+}
+
+function eventCtx(id, seq) {
+    return id && Number.isFinite(seq) ? `[${id},${seq}]` : '[monitor]';
+}
+
+function jobCtx(job) {
+    return eventCtx(job?.id, job?.seq);
 }
 
 // memory = Shell-owned (our own writes, screenshots, Mutter caches); everything else
@@ -99,14 +110,19 @@ function normalizeUriList(text) {
         .join('\n');
 }
 
-function normalizeSpecialCopiedFiles(text) {
+function parseSpecialCopiedFiles(text) {
     const lines = text
         .split('\n')
         .map(line => line.replace(/\r$/, '').trim())
         .filter(Boolean);
-    if (lines.length > 0 && ['copy', 'cut'].includes(lines[0]))
-        lines.shift();
-    return normalizeUriList(lines.join('\n'));
+    let action = 'unknown';
+    if (lines.length > 0 && ['copy', 'cut'].includes(lines[0])) {
+        action = lines.shift();
+    }
+    return {
+        action,
+        uriList: normalizeUriList(lines.join('\n')),
+    };
 }
 
 export class Monitor {
@@ -191,14 +207,14 @@ export class Monitor {
             type,
             value,
         };
-        log.debug(`last content set id=${this._lastContent.id} origin=${origin} sourceKind=${sourceKind} ${debugContent(type, value ?? '')}`);
+        log.debug(`[monitor]: last content set id=${this._lastContent.id} origin=${origin} sourceKind=${sourceKind} ${debugContent(type, value ?? '')}`);
         return this._lastContent;
     }
 
     /** Roll back to `backup` iff the current _lastContent is still a restore marker. */
     setLastContentIfIs(backup) {
         if (this._lastContent?.origin === 'restore') {
-            log.debug(`last content rolled back from origin=restore to ${backup ? `origin=${backup.origin}` : 'null'}`);
+            log.debug(`[monitor]: last content rolled back from origin=restore to ${backup ? `origin=${backup.origin}` : 'null'}`);
             this._lastContent = backup ?? null;
         }
     }
@@ -250,8 +266,8 @@ export class Monitor {
     }
 
     /** Capture a file uri-list as one plain file record. */
-    _captureFile(text, id, seq) {
-        log.debug(`capture file id=${id} seq=${seq} bytes=${new TextEncoder().encode(text).length} uriCount=${uriListEntries(text).length} uriList="${debugText(text)}"`);
+    _captureFile(text, id, seq, { sourceMime = 'text/uri-list', fileAction = 'unknown' } = {}) {
+        log.debug(`${eventCtx(id, seq)}: capture file sourceMime=${sourceMime} fileAction=${fileAction} bytes=${new TextEncoder().encode(text).length} uriCount=${uriListEntries(text).length} uriList="${debugText(text)}"`);
         this._onCapture({ kind: 'file', id, seq, mime: 'text/uri-list', text });
     }
 
@@ -285,10 +301,10 @@ export class Monitor {
             const allow = this._allowMemoryMimes();
             mimes = allowedMimes(rawMimes, allow);
             if (mimes.length === 0) {
-                log.debug(`queue skipped id=${id} seq=${seq} sourceKind=memory reason=denyAllMemorySources mimes=${rawMimes.join(',') || '(none)'} allowMemoryMimes=${allow.join(',') || '(none)'} source=${sourceLabel}`);
+                log.debug(`${eventCtx(id, seq)}: queue skipped sourceKind=memory reason=denyAllMemorySources mimes=${rawMimes.join(',') || '(none)'} allowMemoryMimes=${allow.join(',') || '(none)'} source=${sourceLabel}`);
                 return;
             }
-            log.debug(`queue memory allowed id=${id} seq=${seq} mimes=${rawMimes.join(',') || '(none)'} allowedMimes=${mimes.join(',')} allowMemoryMimes=${allow.join(',') || '(none)'}`);
+            log.debug(`${eventCtx(id, seq)}: queue memory allowed mimes=${rawMimes.join(',') || '(none)'} allowedMimes=${mimes.join(',')} allowMemoryMimes=${allow.join(',') || '(none)'}`);
         }
         const job = {
             id,
@@ -299,7 +315,7 @@ export class Monitor {
             mimes,
         };
         this._queue.push(job);
-        log.debug(`queue received/enqueued id=${id} seq=${seq} sourceKind=${job.sourceKind} source=${sourceLabel} queued=${this._queue.length} running=${this._processing ? 'yes' : 'no'}`);
+        log.debug(`${jobCtx(job)}: queue received/enqueued sourceKind=${job.sourceKind} source=${sourceLabel} queued=${this._queue.length} running=${this._processing ? 'yes' : 'no'}`);
         if (!this._processing)
             this._drain().catch(e => log.warn(`read failed: ${e.message}`));
     }
@@ -310,25 +326,25 @@ export class Monitor {
         if (this._processing)
             return;
         this._processing = true;
-        log.debug('queue drain start');
+        log.debug('[monitor]: queue drain start');
         try {
             while (this._queue.length > 0 && !this._stopped) {
                 const job = this._queue.shift();
-                log.debug(`queue dequeued/handling id=${job.id} seq=${job.seq} sourceKind=${job.sourceKind} source=${job.sourceLabel} remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue dequeued/handling sourceKind=${job.sourceKind} source=${job.sourceLabel} remaining=${this._queue.length}`);
                 await this._readOnce(job);
             }
         } finally {
             this._processing = false;
-            log.debug(`queue drain stop remaining=${this._queue.length}`);
+            log.debug(`[monitor]: queue drain stop remaining=${this._queue.length}`);
         }
     }
 
     async _readOnce(job) {
         try {
             const mimes = job.mimes;
-            log.debug(`source id=${job.id} seq=${job.seq} mimes=${mimes.join(',') || '(none)'}`);
+            log.debug(`${jobCtx(job)}: source mimes=${mimes.join(',') || '(none)'}`);
             if (this._stopped) {
-                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=stopped remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=skipped reason=stopped remaining=${this._queue.length}`);
                 return;
             }
 
@@ -337,7 +353,7 @@ export class Monitor {
             // Privacy: skip password-manager / concealed selections.
             const secret = this._secretMimes();
             if (secret.length && mimes.some(m => secret.includes(m))) {
-                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=concealed remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=skipped reason=concealed remaining=${this._queue.length}`);
                 return;
             }
 
@@ -347,36 +363,52 @@ export class Monitor {
 
             if (has('text/uri-list') || has('x-special/gnome-copied-files')) {
                 if (!this._captureFiles()) {
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file reason=disabled remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file reason=disabled remaining=${this._queue.length}`);
                     return;
                 }
-                const mime = has('text/uri-list') ? 'text/uri-list' : 'x-special/gnome-copied-files';
-                const result = await this._readSourceBytes(job.source, mime, this._maxItemBytes());
-                if (this._stopped) return;
-                if (!result.ok) {
-                    log.warn(`file clipboard read skipped (${mime}, ${result.reason})`);
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file mime=${mime} reason=${result.reason} remaining=${this._queue.length}`);
+                const fileMimes = has('x-special/gnome-copied-files')
+                    ? ['x-special/gnome-copied-files', ...(has('text/uri-list') ? ['text/uri-list'] : [])]
+                    : ['text/uri-list'];
+                let mime = fileMimes[0];
+                let result = null;
+                for (const candidateMime of fileMimes) {
+                    result = await this._readSourceBytes(job.source, candidateMime, this._maxItemBytes());
+                    if (this._stopped) return;
+                    if (result.ok) {
+                        mime = candidateMime;
+                        break;
+                    }
+                    const fallbackMime = fileMimes[fileMimes.indexOf(candidateMime) + 1] ?? '';
+                    if (fallbackMime) {
+                        log.warn(`${jobCtx(job)}: file clipboard read failed mime=${candidateMime} reason=${result.reason} fallbackMime=${fallbackMime}`);
+                        continue;
+                    }
+                    log.warn(`${jobCtx(job)}: file clipboard read skipped mime=${candidateMime} reason=${result.reason}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file mime=${candidateMime} reason=${result.reason} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`source read file id=${job.id} seq=${job.seq} mime=${mime} bytes=${result.bytes.length}`);
+                log.debug(`${jobCtx(job)}: source read file mime=${mime} bytes=${result.bytes.length}`);
                 const rawText = new TextDecoder().decode(result.bytes);
-                const text = mime === 'x-special/gnome-copied-files'
-                    ? normalizeSpecialCopiedFiles(rawText)
-                    : normalizeUriList(rawText);
+                const special = mime === 'x-special/gnome-copied-files'
+                    ? parseSpecialCopiedFiles(rawText)
+                    : null;
+                const fileAction = special?.action ?? 'unknown';
+                const text = special ? special.uriList : normalizeUriList(rawText);
+                log.debug(`${jobCtx(job)}: file payload parsed sourceMime=${mime} fileAction=${fileAction} uriCount=${uriListEntries(text).length} raw="${debugText(rawText)}" normalized="${debugText(text)}"`);
                 if (text) {
                     const candidate = { kind: 'file', mime: 'text/uri-list', value: text };
                     const dropReason = this._dropReason(job, candidate);
                     if (dropReason) {
                         this._notifySuppressedRepeat(job, candidate, dropReason);
-                        log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=file mime=text/uri-list reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=file mime=text/uri-list sourceMime=${mime} fileAction=${fileAction} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
                     const uriCount = uriListEntries(text).length;
-                    this._captureFile(text, job.id, job.seq);
+                    this._captureFile(text, job.id, job.seq, { sourceMime: mime, fileAction });
                     this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'file', value: text });
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=file mime=text/uri-list bytes=${result.bytes.length} uriCount=${uriCount} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=file mime=text/uri-list sourceMime=${mime} fileAction=${fileAction} bytes=${result.bytes.length} uriCount=${uriCount} remaining=${this._queue.length}`);
                 } else {
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=file mime=${mime} reason=empty remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=file mime=${mime} fileAction=${fileAction} reason=empty remaining=${this._queue.length}`);
                 }
                 return;
             }
@@ -386,74 +418,74 @@ export class Monitor {
                 const result = await this._readSourceBytes(job.source, plainMime, this._maxItemBytes());
                 if (this._stopped) return;
                 if (!result.ok) {
-                    log.warn(`text clipboard read skipped (${plainMime}, ${result.reason})`);
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=text mime=${plainMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    log.warn(`${jobCtx(job)}: text clipboard read skipped mime=${plainMime} reason=${result.reason}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=${result.reason} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`source read text id=${job.id} seq=${job.seq} mime=${plainMime} bytes=${result.bytes.length}`);
+                log.debug(`${jobCtx(job)}: source read text mime=${plainMime} bytes=${result.bytes.length}`);
                 const text = new TextDecoder().decode(result.bytes);
                 if (text && text.length > 0) {
-                    log.debug(`source text id=${job.id} seq=${job.seq} value="${debugText(text)}"`);
+                    log.debug(`${jobCtx(job)}: source text value="${debugText(text)}"`);
                     const candidate = { kind: 'text', mime: plainMime, value: text };
                     const dropReason = this._dropReason(job, candidate);
                     if (dropReason) {
                         this._notifySuppressedRepeat(job, candidate, dropReason);
-                        log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=text mime=${plainMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
-                    log.debug(`capture text id=${job.id} seq=${job.seq} bytes=${result.bytes.length}`);
+                    log.debug(`${jobCtx(job)}: capture text bytes=${result.bytes.length}`);
                     this._onCapture({ kind: 'text', id: job.id, seq: job.seq, mime: 'text/plain;charset=utf-8', text });
                     this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'text', value: text });
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=text mime=${plainMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=text mime=${plainMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=text mime=${plainMime} reason=empty remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=empty remaining=${this._queue.length}`);
             }
 
             if (imageMime || hasUnsupportedImage) {
                 if (!this._captureImages()) {
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=disabled remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=disabled remaining=${this._queue.length}`);
                     return;
                 }
                 if (this._imageCaptureDisabled) {
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=disabled-after-failures remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=disabled-after-failures remaining=${this._queue.length}`);
                     return;
                 }
                 if (!imageMime) {
-                    log.warn('skipping image selection; no supported image/png target');
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=unsupported-mime remaining=${this._queue.length}`);
+                    log.warn(`${jobCtx(job)}: image clipboard read skipped reason=unsupported-mime supported=image/png`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=unsupported-mime remaining=${this._queue.length}`);
                     return;
                 }
                 const maxBytes = this._maxBinaryBytes();
                 if (maxBytes <= 0) {
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image reason=binary-cap-zero remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=binary-cap-zero remaining=${this._queue.length}`);
                     return;
                 }
                 const result = await this._readSourceBytes(job.source, imageMime, maxBytes);
                 if (this._stopped) return;
                 if (!result.ok) {
                     this._noteImageReadFailure(result.reason, imageMime);
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped kind=image mime=${imageMime} reason=${result.reason} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image mime=${imageMime} reason=${result.reason} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`source read image id=${job.id} seq=${job.seq} mime=${imageMime} bytes=${result.bytes.length}`);
+                log.debug(`${jobCtx(job)}: source read image mime=${imageMime} bytes=${result.bytes.length}`);
                 const data = GLib.base64_encode(result.bytes);
                 const dropReason = this._dropReason(job, { kind: 'image', mime: imageMime, value: data });
                 if (dropReason) {
                     this._notifySuppressedRepeat(job, { kind: 'image', mime: imageMime, value: data }, dropReason);
-                    log.debug(`queue handled id=${job.id} seq=${job.seq} status=dropped kind=image mime=${imageMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=dropped kind=image mime=${imageMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                     return;
                 }
                 this._imageReadFailures = 0;
                 this._onCapture({ kind: 'image', id: job.id, seq: job.seq, mime: imageMime, bytes: result.bytes });
                 this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'image', value: data });
-                log.debug(`queue handled id=${job.id} seq=${job.seq} status=captured kind=image mime=${imageMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=captured kind=image mime=${imageMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                 return;
             }
-            log.debug(`queue handled id=${job.id} seq=${job.seq} status=skipped reason=unsupported-mime remaining=${this._queue.length}`);
+            log.debug(`${jobCtx(job)}: queue handled status=skipped reason=unsupported-mime remaining=${this._queue.length}`);
         } catch (e) {
-            log.warn(`read failed: ${e.message}`);
-            log.debug(`queue handled id=${job.id} seq=${job.seq} status=failed reason=exception remaining=${this._queue.length}`);
+            log.warn(`${jobCtx(job)}: read failed reason=${e.message}`);
+            log.debug(`${jobCtx(job)}: queue handled status=failed reason=exception remaining=${this._queue.length}`);
         }
     }
 

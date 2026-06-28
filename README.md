@@ -4,7 +4,7 @@ A Wayland-native clipboard manager for GNOME Shell - history, search, instant re
 inspired by CopyQ but implemented as a Shell extension so it works on Wayland (where
 standalone clipboard managers can't monitor the clipboard).
 
-> Status: **M1 + popup**, GNOME Shell **46** only. GNOME 50 comes later once 46 is stable.
+> Status: **M1 + popup**, GNOME Shell **46/50** local builds.
 
 
 ## Features (current)
@@ -27,15 +27,15 @@ standalone clipboard managers can't monitor the clipboard).
 - YAML config (JSON also accepted); privacy skip for password-manager selections.
 
 
-## Install (local, GNOME 46, Wayland)
+## Install (local, GNOME 46/50, Wayland)
 
 ```sh
 # (optional) one-time data-home setup if you keep the default /opt/copy-gnome
 ./scripts/setup-home.sh
 
 ./scripts/install.sh
+# Wayland: LOG OUT and back in, then:
 gnome-extensions enable copy-gnome@clipboard
-# Wayland: LOG OUT and back in for the shell to load the extension.
 ```
 
 Then copy `config.example.yaml` to `$COPY_GNOME_HOME/config/config.yaml` if you want to

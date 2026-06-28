@@ -15,7 +15,7 @@ import { log } from '../core/log.js';
 
 // Always-visible keyboard/mouse cheat sheet shown under the search box. Short, English +
 // symbols. Number-pick feedback temporarily replaces it and restores it when cleared.
-const HINT_TEXT = '↑↓ move · 1-N pick · Enter/click paste · Ctrl+F search · Esc close';
+const HINT_TEXT = '↑↓ move · 1-n pick · enter/click paste · ctrl+f search · esc close';
 const DEFAULT_UI = {
     popupWidth: 640,
     popupMaxHeight: 800,

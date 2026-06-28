@@ -14,11 +14,12 @@ export function setLevel(name) {
 function emit(level, args) {
     if (LEVELS[level] > currentLevel)
         return;
+    const label = level.toUpperCase().padStart(5);
     const msg = args
         .map(a => (a instanceof Error ? `${a.message}\n${a.stack}` : String(a)))
         .join(' ');
     // console.* is available in GJS and routes to the journal.
-    console.log(`${PREFIX} ${level.toUpperCase()}: ${msg}`);
+    console.log(`${PREFIX} ${label}: ${msg}`);
 }
 
 export const log = {

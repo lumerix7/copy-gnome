@@ -54,7 +54,7 @@ function listNames(dirPath) {
             names.push(info.get_name());
         en.close(null);
     } catch (e) {
-        log.warn(`enumerate ${dirPath}: ${e.message}`);
+        log.warn(`[store]: enumerate ${dirPath}: ${e.message}`);
     }
     return names;
 }
@@ -155,17 +155,18 @@ export class Store {
 
         const fileName = this._pickStartupFileName();
         if (!fileName) {
-            log.info('store opened: 0 records');
+            log.info(`[store]: opened 0 records from ${this._dir}`);
             return [];
         }
+        const path = clipPath(this._dir, fileName);
 
         try {
-            const line = await this._readLastLineText(clipPath(this._dir, fileName));
+            const line = await this._readLastLineText(path);
             const records = this._parseSnapshotLine(line);
-            log.info(`store opened: ${records.length} records from ${fileName}`);
+            log.info(`[store]: opened ${records.length} records from ${path}`);
             return records;
         } catch (e) {
-            log.warn(`clips load failed (${fileName}): ${e.message}; starting empty`);
+            log.warn(`[store]: clips load failed path=${path} reason=${e.message}; starting empty`);
             return [];
         }
     }
@@ -204,7 +205,7 @@ export class Store {
                 if (chunk.length !== want) {
                     // Short of a full chunk means the file shrank under us (we only ever append,
                     // so this is unexpected). Fail closed rather than splice a gap into the line.
-                    log.warn('history file changed size while reading; starting empty');
+                    log.warn('[store]: history file changed size while reading; starting empty');
                     return '';
                 }
                 pos = start;
@@ -222,7 +223,7 @@ export class Store {
                 if (nl >= 0)
                     return _dec.decode(buf.subarray(nl + 1, end));
                 if (end > MAX_SNAPSHOT_LINE_BYTES) {
-                    log.warn('latest history snapshot exceeds 64 MiB on disk; starting empty');
+                    log.warn('[store]: latest history snapshot exceeds 64 MiB on disk; starting empty');
                     return '';
                 }
                 if (pos === 0)
@@ -263,16 +264,16 @@ export class Store {
         if (!line)
             return [];
         if (line.length > MAX_SNAPSHOT_LINE_BYTES) {
-            log.warn('latest history snapshot is oversized; starting empty');
+            log.warn('[store]: latest history snapshot is oversized; starting empty');
             return [];
         }
         try {
             const records = normalizeSnapshot(JSON.parse(line), MAX_SNAPSHOT_LINE_BYTES);
             if (records)
                 return records;
-            log.warn('latest history snapshot is invalid; starting empty');
+            log.warn('[store]: latest history snapshot is invalid; starting empty');
         } catch (e) {
-            log.warn(`latest history snapshot is corrupt; starting empty: ${e.message}`);
+            log.warn(`[store]: latest history snapshot is corrupt; starting empty: ${e.message}`);
         }
         return [];
     }
@@ -352,12 +353,12 @@ export class Store {
         if (kept === sorted.length)
             return { records: sorted, line, trimmed: false };
         if (kept === 0) {
-            log.warn(`skipping oversized history snapshot (newest item ${itemBytes[0]} bytes exceeds 64 MiB)`);
+            log.warn(`[store]: skipping oversized history snapshot (newest item ${itemBytes[0]} bytes exceeds 64 MiB)`);
             return { records: [], line: null, trimmed: false };
         }
 
         const trimmed = sorted.slice(0, kept);
-        log.warn(`trimmed history snapshot to ${kept} entries to stay under 64 MiB`);
+        log.warn(`[store]: trimmed history snapshot to ${kept} entries to stay under 64 MiB`);
         return { records: trimmed, line: this._lineForSnapshot(trimmed), trimmed: true };
     }
 
@@ -380,17 +381,18 @@ export class Store {
             const { records, line, trimmed } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
-            log.debug(`flush: ${records.length} records -> ${batch.target}${trimmed ? ' (trimmed)' : ''}`);
-            await this._appendTextAsync(clipPath(this._dir, batch.target), line + '\n');
+            const path = clipPath(this._dir, batch.target);
+            log.debug(`[store]: flush ${records.length} records -> ${path}${trimmed ? ' (trimmed)' : ''}`);
+            await this._appendTextAsync(path, line + '\n');
             if (trimmed)
                 this._onTrim(records, batch.gen);
             this._degraded = false;
         } catch (e) {
             if (!this._degraded) {
                 this._degraded = true;
-                log.error(`persistence append failed; dropping pending history snapshot: ${e.message}`);
+                log.error(`[store]: persistence append failed; dropping pending history snapshot: ${e.message}`);
             } else {
-                log.warn(`persistence append failed; dropping pending history snapshot: ${e.message}`);
+                log.warn(`[store]: persistence append failed; dropping pending history snapshot: ${e.message}`);
             }
         } finally {
             this._busy = false;
@@ -428,22 +430,23 @@ export class Store {
                     return;
                 const fileDay = clipDateFromName(name);
                 if (!fileDay) {
-                    log.warn(`cleanup skip unparsable name: ${name}`);
+                    log.warn(`[store]: cleanup skip unparsable name=${name}`);
                     continue;
                 }
                 const ageDays = Math.floor(now.difference(fileDay) / dayMicros);
                 if (ageDays <= maxAgeDays)
                     continue;
                 try {
-                    const file = Gio.File.new_for_path(clipPath(this._dir, name));
+                    const path = clipPath(this._dir, name);
+                    const file = Gio.File.new_for_path(path);
                     await file.delete_async(GLib.PRIORITY_DEFAULT, null);
-                    log.info(`cleanup deleted ${name} (age ${ageDays}d)`);
+                    log.info(`[store]: cleanup deleted ${path} ageDays=${ageDays}`);
                 } catch (e) {
-                    log.warn(`cleanup delete failed ${name}: ${e.message}`);
+                    log.warn(`[store]: cleanup delete failed path=${clipPath(this._dir, name)} reason=${e.message}`);
                 }
             }
         } catch (e) {
-            log.error(`cleanup sweep failed: ${e.message}`);
+            log.error(`[store]: cleanup sweep failed: ${e.message}`);
         } finally {
             this._sweeping = false;
         }
@@ -462,13 +465,14 @@ export class Store {
             const { line } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
-            log.debug(`flush(final): ${batch.target}`);
-            const file = Gio.File.new_for_path(clipPath(this._dir, batch.target));
+            const path = clipPath(this._dir, batch.target);
+            log.debug(`[store]: flush(final) -> ${path}`);
+            const file = Gio.File.new_for_path(path);
             const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
             stream.write_all(_enc.encode(line + '\n'), null);
             stream.close(null);
         } catch (e) {
-            log.error(`final flush failed: ${e.message}`);
+            log.error(`[store]: final flush failed: ${e.message}`);
         }
     }
 }

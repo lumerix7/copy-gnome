@@ -15,7 +15,7 @@ For each target version (46, 50):
 2. Stamp `metadata.json` `shell-version` = `["<ver>"]` (+ bump `version`).
 3. Apply compat selection if needed (see [09](09-multi-version.md)).
 4. `glib-compile-schemas copy-gnome-<ver>/schemas/` (validates + compiles).
-5. Optionally `gnome-extensions pack` to produce a distributable zip.
+5. `gnome-extensions pack` to produce the installable bundle.
 
 `gnome-extensions pack` example:
 
@@ -28,20 +28,44 @@ gnome-extensions pack copy-gnome-46 \
 
 ## Install (`scripts/install.sh`)
 
-Detect the running Shell version and pick the matching dir:
+Detect the running Shell version, pick the matching dir, pack it, and install the
+bundle with GNOME's standard extension CLI:
 
 ```sh
 VER=$(gnome-shell --version | grep -oE '[0-9]+' | head -1)   # e.g. 46
 SRC="copy-gnome-${VER}"
-DEST="$HOME/.local/share/gnome-shell/extensions/copy-gnome@clipboard"
 
-rm -rf "$DEST"; mkdir -p "$DEST"
-cp -r "$SRC/." "$DEST/"
-glib-compile-schemas "$DEST/schemas/"          # ensure compiled at destination
-gnome-extensions enable copy-gnome@clipboard || true
+gnome-extensions pack "$SRC" \
+  --extra-source=core \
+  --extra-source=ui \
+  --extra-source=vendor \
+  --schema=schemas/org.gnome.shell.extensions.copy-gnome.gschema.xml \
+  --force \
+  --out-dir=/tmp/copy-gnome-pack
+
+gnome-extensions install --force \
+  /tmp/copy-gnome-pack/copy-gnome@clipboard.shell-extension.zip
 ```
 
-Or, from a packed zip: `gnome-extensions install dist/copy-gnome@clipboard.shell-extension.zip --force`.
+Then log out and back in on Wayland before enabling:
+
+```sh
+gnome-extensions enable copy-gnome@clipboard
+```
+
+Or, from a packed zip:
+
+```sh
+gnome-extensions install --force dist/copy-gnome@clipboard.shell-extension.zip
+```
+
+`core/`, `ui/`, and `vendor/` must be passed as `--extra-source` entries; otherwise
+`gnome-extensions pack` only includes the top-level extension files and the installed
+bundle is incomplete.
+
+This standard install path is still not a hot-reload path: in current GNOME Shell
+sessions it may install files to disk while `gnome-extensions info/enable` still cannot
+see the UUID until the next login.
 
 ## First-run data dir (the `/opt/copy-gnome/$USER` default - see [05](05-config.md))
 
@@ -81,7 +105,7 @@ sudo install -d -m 1777 /opt/copy-gnome          # sticky like /tmp: each user o
 | Script | Purpose |
 |--------|---------|
 | `build.sh` | src → copy-gnome-46/50, stamp, compile schemas, pack |
-| `install.sh` | detect version, copy to extensions dir, compile schemas, enable |
+| `install.sh` | detect version, pack with `gnome-extensions`, install bundle; relogin before enable on Wayland |
 | `setup-home.sh` | one-time `sudo` creation of `/opt/copy-gnome` |
 | `dev-nested.sh` | launch nested Wayland Shell for testing |
 | `uninstall.sh` | disable + remove install dir (leaves data unless `--purge`) |

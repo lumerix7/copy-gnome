@@ -16,7 +16,7 @@ copy-gnome config get general.captureImages
 copy-gnome config set general.captureImages false
 copy-gnome config set general.denyAllMemorySources true
 copy-gnome config set general.allowMemoryMimes '["image/*"]'
-copy-gnome config set ui.fileApps '["org.gnome.Nautilus"]'
+copy-gnome config set ui.fileApps '["org.gnome.nautilus"]'
 copy-gnome config edit
 copy-gnome repair
 copy-gnome --completion bash

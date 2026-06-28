@@ -17,8 +17,8 @@ Options:
   -y, --yes     Execute after showing the preview, without prompting
   -h, --help    Show this help
 
-Without --yes, the script shows a preview and asks before removing/replacing
-the local extension install directory.
+Without --yes, the script shows a preview and asks before installing/replacing
+the local extension bundle.
 EOF
 }
 
@@ -45,11 +45,18 @@ VER="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
 
 SRC="$REPO_ROOT/copy-gnome-$VER"
 if [[ ! -d "$SRC" ]]; then
-  echo "no build for GNOME $VER at $SRC (currently only 46 is supported)" >&2
+  echo "no build for GNOME $VER at $SRC (available builds: copy-gnome-*)" >&2
   exit 1
 fi
 
 DEST="$HOME/.local/share/gnome-shell/extensions/$UUID"
+PACK_DIR="$(mktemp -d)"
+BUNDLE="$PACK_DIR/$UUID.shell-extension.zip"
+
+cleanup() {
+  rm -rf "$PACK_DIR"
+}
+trap cleanup EXIT
 
 cat <<EOF
 copy-gnome install preview
@@ -57,11 +64,21 @@ copy-gnome install preview
 GNOME Shell version: $VER
 Source:              $SRC
 Destination:         $DEST
+Bundle:              $BUNDLE
 
-Actions:
-  1. Remove the destination directory if it exists.
-  2. Copy the GNOME $VER extension build into the destination.
-  3. Compile GSettings schemas if the build contains schemas/.
+Steps:
+  1. gnome-extensions pack "$SRC" \\
+       --extra-source=core \\
+       --extra-source=ui \\
+       --extra-source=vendor \\
+       --schema=schemas/org.gnome.shell.extensions.copy-gnome.gschema.xml \\
+       --force \\
+       --out-dir="$PACK_DIR"
+  2. gnome-extensions install --force --print-uuid "$BUNDLE"
+  3. gnome-extensions enable "$UUID"   # after logout/login on Wayland
+
+Note: this script performs steps 1 and 2. Do not reload GNOME Shell in place on Wayland;
+      log out and back in before step 3 if the current Shell cannot see the UUID.
 
 EOF
 
@@ -82,16 +99,30 @@ if [[ "$YES" != 1 ]]; then
   esac
 fi
 
-echo "installing $SRC -> $DEST"
-rm -rf "$DEST"
-mkdir -p "$DEST"
-cp -r "$SRC/." "$DEST/"
+echo "packing $SRC"
+gnome-extensions pack "$SRC" \
+  --extra-source=core \
+  --extra-source=ui \
+  --extra-source=vendor \
+  --schema=schemas/org.gnome.shell.extensions.copy-gnome.gschema.xml \
+  --force \
+  --out-dir="$PACK_DIR"
 
-if [[ -d "$DEST/schemas" ]]; then
-  echo "compiling GSettings schema"
-  glib-compile-schemas "$DEST/schemas/"
+BUNDLE="$PACK_DIR/$UUID.shell-extension.zip"
+if [[ ! -f "$BUNDLE" ]]; then
+  echo "expected bundle not found: $BUNDLE" >&2
+  exit 1
+fi
+
+echo "installing bundle with gnome-extensions install --force"
+installed_uuid="$(gnome-extensions install --force --print-uuid "$BUNDLE")"
+if [[ "$installed_uuid" != "$UUID" ]]; then
+  echo "installed unexpected extension UUID: $installed_uuid (expected $UUID)" >&2
+  exit 1
 fi
 
 echo "done."
-echo "Enable with:   gnome-extensions enable $UUID"
-echo "On Wayland you must LOG OUT and back in for the shell to load it."
+echo "Installed to:  $DEST"
+echo "Wayland next:  LOG OUT and back in, then run:"
+echo "               gnome-extensions enable $UUID"
+echo "Note: current GNOME Shell may not list a newly installed local extension until relogin."

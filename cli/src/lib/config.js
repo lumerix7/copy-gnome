@@ -38,12 +38,8 @@ export const DEFAULTS = {
     autoPaste: true,
     autoPasteDelayMs: 220,
     pasteRestoresFocus: true,
-    fileApps: ["org.gnome.Nautilus"],
-    terminalApps: [
-      "gnome-terminal", "org.gnome.Terminal", "org.gnome.Console", "kgx",
-      "konsole", "xterm", "alacritty", "kitty", "foot", "wezterm",
-      "tilix", "terminator", "Terminal",
-    ],
+    fileApps: ["org.gnome.nautilus"],
+    terminalApps: ["terminal"],
     pasteOverrides: [],
   },
   logging: {
@@ -206,8 +202,8 @@ function sanitizeConfig(config, warnings) {
 
   config.privacy.secretMimes = stringList(config.privacy.secretMimes, []);
   config.general.allowMemoryMimes = stringList(config.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
-  config.ui.fileApps = stringList(config.ui.fileApps, DEFAULTS.ui.fileApps);
-  config.ui.terminalApps = stringList(config.ui.terminalApps, DEFAULTS.ui.terminalApps);
+  config.ui.fileApps = lowerStringList(config.ui.fileApps, DEFAULTS.ui.fileApps);
+  config.ui.terminalApps = lowerStringList(config.ui.terminalApps, DEFAULTS.ui.terminalApps);
   config.ui.pasteOverrides = pasteOverrides(config.ui.pasteOverrides, warnings);
   return config;
 }
@@ -242,6 +238,10 @@ function stringList(value, fallback) {
       .filter(x => x.length > 0)
       .slice(0, 100)
     : fallback.slice();
+}
+
+function lowerStringList(value, fallback) {
+  return stringList(value, fallback).map(x => x.toLowerCase());
 }
 
 function pasteOverrides(value, warnings) {

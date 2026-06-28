@@ -289,6 +289,9 @@ function runExtensionCommand(action, opts = {}) {
   process.stderr.write(r.stderr);
   if (!r.ok && !opts.allowFailure) {
     error(`${commandLine("gnome-extensions", args)} failed: ${resultText(r)}`);
+    const status = collectStatus();
+    if (status.extension.installed && !status.extension.infoOk)
+      warn(`installed files exist at ${status.extension.dir}, but GNOME Shell does not list ${UUID}; log out and back in on Wayland, then retry`);
     process.exitCode = 1;
   }
 }

@@ -196,6 +196,10 @@ export function printStatus(status) {
   field("Installed", status.extension.installed, { color: yesNo });
   field("Dir", status.extension.dir, { color: dim });
   field("State", status.extension.info?.state || "unknown", { color: stateColor });
+  if (status.extension.installed && !status.extension.infoOk)
+    field("Discovery", status.session === "wayland"
+      ? "not listed by current Shell; log out/in, then enable"
+      : "not listed by current Shell", { color: chalk.yellow });
   field("Keybinding", status.gsettings.togglePopup || status.gsettings.error || "unknown");
   console.log("");
 

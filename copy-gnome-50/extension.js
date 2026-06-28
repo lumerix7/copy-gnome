@@ -18,14 +18,36 @@ import { Indicator } from './ui/indicator.js';
 import { Popup } from './ui/popup.js';
 
 const UUID = 'copy-gnome@clipboard';
+const DEBUG_VALUE_CHARS = 160;
 
 function textPreview(text) {
     return text.replace(/\s+/g, ' ').trim().slice(0, 100);
 }
 
+function debugValue(value, max = DEBUG_VALUE_CHARS) {
+    const text = String(value ?? '');
+    const shown = text.length <= max
+        ? text
+        : `${text.slice(0, Math.floor(max * 0.6))}...${text.slice(-(max - Math.floor(max * 0.6)))}`;
+    return shown
+        .replace(/\\/g, '\\\\')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t');
+}
+
+function eventCtx(id, seq, fallback = 'extension') {
+    return id && Number.isFinite(seq) && seq > 0 ? `[${id},${seq}]` : `[${fallback}]`;
+}
+
 function filePreview(uriList) {
     const uris = uriList.split('\n').filter(Boolean);
-    const first = decodeURIComponent(uris[0] || '');
+    let first = uris[0] || '';
+    try {
+        first = decodeURIComponent(first);
+    } catch (e) {
+        log.debug(`[restore]: file preview decode failed uri="${debugValue(first)}": ${e.message}`);
+    }
     return uris.length > 1 ? `${first} (+${uris.length - 1} more)` : first;
 }
 
@@ -43,7 +65,7 @@ function filePathText(uriList) {
         try {
             paths.push(decodeURIComponent(line.replace(/^file:\/\//, '')));
         } catch (e) {
-            log.debug(`file path decode failed uri="${line.slice(0, 160)}": ${e.message}`);
+            log.debug(`[restore]: file path decode failed uri="${debugValue(line)}" reason=${e.message}`);
         }
     }
     return paths.join('\n');
@@ -277,11 +299,11 @@ export default class CopyGnomeExtension extends Extension {
                 return;
             const cfg = this._config;
             const seq = Number.isFinite(c.seq) ? c.seq : 0;
-            const seqLog = seq > 0 ? ` seq=${seq}` : '';
+            const ctx = eventCtx(c.id, seq);
             if (c.kind === 'text' || c.kind === 'file') {
                 const text = c.text;
                 if (!text) {
-                    log.debug(`capture skipped${seqLog} kind=${c.kind} reason=empty-text`);
+                    log.debug(`${ctx}: capture skipped kind=${c.kind} reason=empty-text`);
                     return;
                 }
                 const size = byteLength(text);
@@ -294,15 +316,15 @@ export default class CopyGnomeExtension extends Extension {
                         encoding: 'uri',
                         uri: text, bytes: size, preview,
                     });
-                    log.debug(`history add${seqLog} id=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${preview}"`);
+                    log.debug(`${ctx}: history add recordId=${rec.id} kind=file bytes=${size} uriCount=${uriListCount(text)} preview="${debugValue(preview)}"`);
                     return;
                 }
                 if (size > cfg.history.maxItemBytes) {
-                    log.debug(`skipping oversized text (${size} bytes)`);
+                    log.debug(`${ctx}: capture skipped kind=text reason=history-max-bytes bytes=${size} max=${cfg.history.maxItemBytes}`);
                     return;
                 }
                 if (size > cfg.storage.textMaxBytes) {
-                    log.warn(`skipping oversized text (${size} bytes exceeds text payload cap)`);
+                    log.warn(`${ctx}: capture skipped kind=text reason=text-cap bytes=${size} max=${cfg.storage.textMaxBytes}`);
                     return;
                 }
                 const rec = this._history.add({
@@ -310,23 +332,23 @@ export default class CopyGnomeExtension extends Extension {
                     kind: 'text', mime: c.mime, encoding: 'utf8', text,
                     bytes: size, preview: textPreview(text),
                 });
-                log.debug(`history add${seqLog} id=${rec.id} kind=text bytes=${size}`);
+                log.debug(`${ctx}: history add recordId=${rec.id} kind=text bytes=${size}`);
             } else if (c.kind === 'image') {
                 if (!cfg.general.captureImages) {
-                    log.debug(`capture skipped${seqLog} kind=image reason=disabled`);
+                    log.debug(`${ctx}: capture skipped kind=image reason=disabled`);
                     return;
                 }
                 const u8 = c.bytes;
                 if (!u8 || u8.length === 0) {
-                    log.debug(`capture skipped${seqLog} kind=image reason=empty-bytes`);
+                    log.debug(`${ctx}: capture skipped kind=image reason=empty-bytes`);
                     return;
                 }
                 if (u8.length > cfg.history.maxItemBytes) {
-                    log.debug(`skipping oversized image (${u8.length} bytes)`);
+                    log.debug(`${ctx}: capture skipped kind=image reason=history-max-bytes bytes=${u8.length} max=${cfg.history.maxItemBytes}`);
                     return;
                 }
                 if (u8.length > cfg.storage.binaryMaxBytes) {
-                    log.warn(`skipping oversized image (${u8.length} bytes exceeds binary payload cap)`);
+                    log.warn(`${ctx}: capture skipped kind=image reason=binary-cap bytes=${u8.length} max=${cfg.storage.binaryMaxBytes}`);
                     return;
                 }
                 const data = GLib.base64_encode(u8);
@@ -337,7 +359,7 @@ export default class CopyGnomeExtension extends Extension {
                     bytes: u8.length,
                     preview: `[image ${Math.round(u8.length / 1024)} KB]`,
                 });
-                log.debug(`history add${seqLog} id=${rec.id} kind=image bytes=${u8.length}`);
+                log.debug(`${ctx}: history add recordId=${rec.id} kind=image bytes=${u8.length}`);
             }
         } catch (e) {
             log.warn(`capture failed: ${e.message}`);
@@ -349,14 +371,14 @@ export default class CopyGnomeExtension extends Extension {
             if (!this._enabled || !this._history || d?.reason !== 'same-last')
                 return;
             const seq = Number.isFinite(d.seq) ? d.seq : 0;
-            const seqLog = seq > 0 ? ` seq=${seq}` : '';
+            const ctx = eventCtx(d.id, seq);
             const top = this._history.list(1)[0] ?? null;
             if (!recordMatchesDrop(top, d)) {
-                log.warn(`suppressed repeat skipped history touch${seqLog} repeatId=${d.id ?? '(none)'} kind=${d.kind ?? '(none)'} topId=${top?.id ?? '(none)'} topKind=${top?.kind ?? '(none)'} reason=top-mismatch`);
+                log.warn(`${ctx}: suppressed repeat skipped history touch repeatId=${d.id ?? '(none)'} kind=${d.kind ?? '(none)'} topId=${top?.id ?? '(none)'} topKind=${top?.kind ?? '(none)'} reason=top-mismatch`);
                 return;
             }
             this._history.touch(top);
-            log.debug(`history touch suppressed-repeat${seqLog} repeatId=${d.id} targetId=${top.id} kind=${top.kind} bytes=${top.bytes} reason=same-last`);
+            log.debug(`${ctx}: history touch suppressed-repeat repeatId=${d.id} targetId=${top.id} kind=${top.kind} bytes=${top.bytes} reason=same-last`);
         } catch (e) {
             log.warn(`suppressed repeat handling failed: ${e.message}`);
         }
@@ -379,58 +401,61 @@ export default class CopyGnomeExtension extends Extension {
                 this._monitor.setLastContent({ origin: 'restore', type, value, sourceKind: 'memory', source: '(self-restore)' });
             if (rec.kind === 'image' && rec.data) {
                 if (!this._config.general.captureImages) {
-                    log.warn('image restore skipped; image support is disabled');
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=disabled`);
                     return;
                 }
                 const u8 = GLib.base64_decode(rec.data);
                 if (!u8) {
-                    log.warn('image restore skipped; invalid base64 payload');
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=invalid-base64`);
                     return;
                 }
                 markSelfWrite('image', rec.data);
                 wrote = Clipboard.setContent(rec.mime, u8);
             } else if (rec.kind === 'file' && rec.uri) {
                 if (!this._config.general.captureFiles) {
-                    log.warn('file restore skipped; file support is disabled');
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=disabled`);
                     return;
                 }
                 const wmClass = this._targetWmClass(targetWindow);
                 const restoreFileUri = this._shouldRestoreFileUri(wmClass);
                 const mode = restoreFileUri ? 'file' : 'path';
-                log.debug(`file restore target wmClass="${wmClass}" mode=${mode} fileApps=${(this._config?.ui?.fileApps ?? []).join(',') || '(none)'}`);
+                const fileApps = this._config?.ui?.fileApps ?? [];
+                const fileMatch = this._matchingConfigSubstring(wmClass, fileApps);
+                log.debug(`[restore]: file target recordId=${rec.id} wm_class="${debugValue(wmClass)}" normalized="${debugValue(String(wmClass ?? '').toLowerCase())}" mode=${mode} match=${fileMatch || '(none)'} fileApps=${fileApps.join(',') || '(none)'}`);
                 if (restoreFileUri) {
                     markSelfWrite('file', rec.uri);
                     wrote = Clipboard.setContent('text/uri-list', encodeUtf8(rec.uri));
-                    log.debug(`file restore mode=file wmClass="${wmClass}" uriCount=${uriListCount(rec.uri)}`);
+                    log.debug(`[restore]: file clipboard write mode=file recordId=${rec.id} uriCount=${uriListCount(rec.uri)} uriList="${debugValue(rec.uri)}"`);
                 } else {
                     const pathText = filePathText(rec.uri);
                     if (!pathText) {
-                        log.warn('file restore skipped; no path text available');
+                        log.warn(`[restore]: file restore skipped recordId=${rec.id} reason=no-path-text uriList="${debugValue(rec.uri)}"`);
                         return;
                     }
                     markSelfWrite('text', pathText);
                     wrote = Clipboard.setText(pathText);
-                    log.debug(`file restore mode=path wmClass="${wmClass}" bytes=${byteLength(pathText)} uriCount=${uriListCount(rec.uri)}`);
+                    log.debug(`[restore]: file clipboard write mode=path recordId=${rec.id} bytes=${byteLength(pathText)} uriCount=${uriListCount(rec.uri)} value="${debugValue(pathText)}"`);
                 }
             } else if (rec.text != null) {
                 markSelfWrite('text', rec.text);
+                log.debug(`[restore]: text clipboard write recordId=${rec.id} bytes=${byteLength(rec.text)} value="${debugValue(rec.text)}"`);
                 wrote = Clipboard.setText(rec.text);
             } else if (rec.data) {
                 const u8 = GLib.base64_decode(rec.data);
                 if (!u8) {
-                    log.warn('binary restore skipped; invalid base64 payload');
+                    log.warn(`[restore]: skipped recordId=${rec.id} kind=${rec.kind ?? 'binary'} reason=invalid-base64`);
                     return;
                 }
                 markSelfWrite('binary', rec.data);
                 wrote = Clipboard.setContent(rec.mime, u8);
             } else {
-                log.warn('restore skipped; record has no payload');
+                log.warn(`[restore]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-payload`);
                 return;
             }
 
             if (!wrote) {
                 this._monitor.setLastContentIfIs(backup);
-                log.warn('restore aborted; clipboard write failed');
+                log.warn(`[restore]: aborted recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=clipboard-write-failed`);
                 return;
             }
 
@@ -438,25 +463,32 @@ export default class CopyGnomeExtension extends Extension {
                 return;
             // Move the used entry to the front (MRU).
             this._history.touch(rec);
-            log.info(`restored id=${rec.id} kind=${rec.kind} bytes=${rec.bytes}`);
+            log.info(`[restore]: restored recordId=${rec.id} kind=${rec.kind} bytes=${rec.bytes}`);
 
             // Optionally paste into the focused window after focus returns.
             if (this._config.ui.autoPaste)
-                this._schedulePaste(targetWindow);
+                this._schedulePaste(targetWindow, rec);
+            else
+                log.debug(`[paste]: skipped recordId=${rec.id} reason=autoPaste-disabled`);
         } catch (e) {
             log.warn(`restore failed: ${e.message}`);
         }
     }
 
-    _schedulePaste(targetWindow = null) {
+    _schedulePaste(targetWindow = null, rec = null) {
         // Delay so focus has returned to the previous window after the popup closed.
         const delayMs = Math.max(0, this._config.ui.autoPasteDelayMs ?? 220);
+        log.debug(`[paste]: scheduled recordId=${rec?.id ?? '(none)'} delayMs=${delayMs}`);
         const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
             this._timers.delete(id);
             try {
                 if (this._enabled) {
                     this._restorePasteFocus(targetWindow);
-                    paste(this._resolvePasteCombo());
+                    const plan = this._resolvePastePlan();
+                    log.debug(`[paste]: before inject recordId=${rec?.id ?? '(none)'} wm_class="${debugValue(plan.wmClass)}" normalized="${debugValue(plan.normalized)}" combo=${plan.combo} reason=${plan.reason} match=${plan.match || '(none)'}`);
+                    const ok = paste(plan.combo, '[paste]');
+                    if (!ok)
+                        log.warn(`[paste]: injection failed recordId=${rec?.id ?? '(none)'} combo=${plan.combo} wm_class="${debugValue(plan.wmClass)}"`);
                 }
             } catch (e) {
                 log.warn(`scheduled paste failed: ${e.message}`);
@@ -472,6 +504,8 @@ export default class CopyGnomeExtension extends Extension {
         try {
             if (targetWindow.minimized)
                 return;
+            const wmClass = this._targetWmClass(targetWindow);
+            log.debug(`[paste]: restoring focus wm_class="${debugValue(wmClass)}"`);
             targetWindow.activate(global.get_current_time());
         } catch (e) {
             log.debug(`paste focus restore skipped: ${e.message}`);
@@ -490,25 +524,66 @@ export default class CopyGnomeExtension extends Extension {
 
     _shouldRestoreFileUri(wmClass) {
         const hay = String(wmClass ?? '').toLowerCase();
-        return (this._config?.ui?.fileApps ?? [])
-            .some(t => hay.includes(String(t).toLowerCase()));
+        if (!hay)
+            return false;
+        return this._matchingConfigSubstring(hay, this._config?.ui?.fileApps ?? []) !== '';
+    }
+
+    _matchingConfigSubstring(wmClass, values) {
+        const hay = String(wmClass ?? '').toLowerCase();
+        if (!hay || !Array.isArray(values))
+            return '';
+        for (const value of values) {
+            const needle = String(value ?? '').toLowerCase();
+            if (needle && hay.includes(needle))
+                return needle;
+        }
+        return '';
     }
 
     // Pick the paste keystroke for the currently focused window. There is no semantic
     // "paste" on Wayland, so this is per-app; the clipboard is already set regardless.
     _resolvePasteCombo() {
+        return this._resolvePastePlan().combo;
+    }
+
+    _resolvePastePlan() {
+        const fallback = { combo: 'ctrl-v', reason: 'default', match: '', wmClass: '', normalized: '' };
         if (!this._config)
-            return 'ctrl-v';
-        const win = global.display.get_focus_window();
-        const hay = (win?.get_wm_class() ?? '').toLowerCase();
-        const ui = this._config.ui;
+            return { ...fallback, reason: 'no-config' };
+        let wmClass = '';
+        try {
+            const win = global.display.get_focus_window();
+            wmClass = win?.get_wm_class?.() ?? '';
+        } catch (e) {
+            log.debug(`[paste]: wm_class read failed: ${e.message}`);
+            return { ...fallback, reason: 'wm-class-error' };
+        }
+        const hay = String(wmClass ?? '').toLowerCase();
+        if (!hay)
+            return { ...fallback, reason: 'no-wm-class', wmClass, normalized: hay };
+        const ui = this._config.ui ?? {};
 
         for (const o of ui.pasteOverrides ?? []) {
-            if (o?.match && hay.includes(String(o.match).toLowerCase()))
-                return o.combo ?? 'ctrl-v';
+            const match = String(o?.match ?? '').toLowerCase();
+            if (match && hay.includes(match))
+                return {
+                    combo: o.combo ?? 'ctrl-v',
+                    reason: 'pasteOverride',
+                    match,
+                    wmClass,
+                    normalized: hay,
+                };
         }
-        if (ui.terminalApps.some(t => hay.includes(String(t).toLowerCase())))
-            return 'ctrl-shift-v';
-        return 'ctrl-v';
+        const terminalMatch = this._matchingConfigSubstring(hay, ui.terminalApps ?? []);
+        if (terminalMatch)
+            return {
+                combo: 'ctrl-shift-v',
+                reason: 'terminalApps',
+                match: terminalMatch,
+                wmClass,
+                normalized: hay,
+            };
+        return { ...fallback, wmClass, normalized: hay };
     }
 }

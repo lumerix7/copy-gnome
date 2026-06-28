@@ -9,7 +9,8 @@ and paste/restore decides which clipboard MIME to write.
 File capture is not a special twin flow.
 
 1. If the source advertises `text/uri-list` or `x-special/gnome-copied-files`, read only the
-   file URI list from that same queued source.
+   file URI list from that same queued source. Prefer `x-special/gnome-copied-files` when it
+   is present so the first-line action (`copy` / `cut`) can be logged.
 2. Normalize it into newline-separated URI entries.
 3. Add exactly one `kind=file` history record:
 
@@ -26,17 +27,20 @@ File capture is not a special twin flow.
 ```
 
 No `text/plain` path twin is captured, synthesized, promoted, or linked. File bytes are
-never read.
+never read. The `x-special/gnome-copied-files` action is logged as
+`fileAction=copy|cut|unknown` but is not stored or replayed yet; restore remains a
+non-destructive file-reference paste.
 
 
 ## Restore
 
 Restore writes exactly one clipboard MIME for a file record:
 
-- if the focused/target window `wm_class` matches `ui.fileApps`, write `text/uri-list`
+- if the focused/target window has a `wm_class`, lower-case it and match by substring
+  against lower-cased `ui.fileApps`; matches write `text/uri-list`
 - otherwise, decode the URI list to path text and write `text/plain`
 
-`ui.fileApps` defaults to `["org.gnome.Nautilus"]`, so Nautilus receives `text/uri-list`;
+`ui.fileApps` defaults to `["org.gnome.nautilus"]`, so Nautilus receives `text/uri-list`;
 other apps receive path text unless the user opts them into file-target behavior.
 
 

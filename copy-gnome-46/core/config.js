@@ -43,13 +43,9 @@ export const DEFAULTS = {
         pasteRestoresFocus: true,
         // wm_class substrings that should receive copied files as text/uri-list.
         // All other apps receive the decoded file path as text/plain.
-        fileApps: ['org.gnome.Nautilus'],
+        fileApps: ['org.gnome.nautilus'],
         // wm_class substrings whose paste shortcut is Ctrl+Shift+V (terminals).
-        terminalApps: [
-            'gnome-terminal', 'org.gnome.Terminal', 'org.gnome.Console', 'kgx',
-            'konsole', 'xterm', 'alacritty', 'kitty', 'foot', 'wezterm',
-            'tilix', 'terminator', 'Terminal',
-        ],
+        terminalApps: ['terminal'],
         // Per-app paste combo overrides (checked before terminalApps). Each entry:
         //   { match: '<wm_class substring>', combo: 'ctrl-v'|'ctrl-shift-v'|'shift-insert'|'none' }
         // Use 'none' to only set the clipboard (no keystroke) for an app.
@@ -171,8 +167,8 @@ function sanitizeConfig(cfg) {
 
     cfg.privacy.secretMimes = stringList(cfg.privacy.secretMimes, DEFAULTS.privacy.secretMimes);
     cfg.general.allowMemoryMimes = stringList(cfg.general.allowMemoryMimes, DEFAULTS.general.allowMemoryMimes);
-    cfg.ui.fileApps = stringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
-    cfg.ui.terminalApps = stringList(cfg.ui.terminalApps, DEFAULTS.ui.terminalApps);
+    cfg.ui.fileApps = lowerStringList(cfg.ui.fileApps, DEFAULTS.ui.fileApps);
+    cfg.ui.terminalApps = lowerStringList(cfg.ui.terminalApps, DEFAULTS.ui.terminalApps);
     cfg.ui.pasteOverrides = pasteOverrides(cfg.ui.pasteOverrides);
 
     return cfg;
@@ -208,6 +204,10 @@ function stringList(value, fallback) {
         .map(v => v.trim())
         .filter(v => v.length > 0)
         .slice(0, 100);
+}
+
+function lowerStringList(value, fallback) {
+    return stringList(value, fallback).map(v => v.toLowerCase());
 }
 
 function pasteOverrides(value) {

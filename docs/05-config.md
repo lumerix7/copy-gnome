@@ -106,9 +106,10 @@ ui:
                                     # regardless; autoPaste only adds the paste keystroke.
   autoPasteDelayMs: 220             # delay before injecting paste after popup closes
   pasteRestoresFocus: true
-  fileApps: ["org.gnome.Nautilus"]  # wm_class substrings that receive file records as
-                                    # text/uri-list; all others receive path text
-  terminalApps: [...]               # wm_class substrings that paste with Ctrl+Shift+V
+  fileApps: ["org.gnome.nautilus"]  # lower-case wm_class substrings that receive file
+                                    # records as text/uri-list; all others receive path text
+  terminalApps: ["terminal"]        # lower-case wm_class substrings that paste with
+                                    # Ctrl+Shift+V
   pasteOverrides: []                # [{match: <wm_class>, combo: ctrl-v|ctrl-shift-v|
                                     #   shift-insert|none}] checked before terminalApps
 

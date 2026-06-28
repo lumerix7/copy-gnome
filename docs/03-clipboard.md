@@ -63,6 +63,12 @@ not wait for, synthesize, or promote a separate `text/plain` path entry. The fil
 the URI-list reference only; when the user restores it, the target app config decides whether
 to write `text/uri-list` or decoded path text.
 
+When `x-special/gnome-copied-files` is offered, the first payload line may be `copy` or
+`cut`. The monitor logs this as `fileAction=copy|cut|unknown` and stores only the normalized
+URI list. Current restore treats the entry as a file reference, not as a destructive move.
+Plain text cut/copy generally exposes the same text clipboard payload, with no separate
+standard action field to preserve.
+
 Non-text clipboard capture is enabled by default in the current test build. On GNOME
 Shell 46 Wayland, screenshot tools can place transient image data on the clipboard, and
 reading those bytes from inside Shell has been observed to crash GNOME Shell (`signal 11`)
@@ -117,8 +123,9 @@ default 220 ms).
 clipboard via *its own* shortcut, so auto-paste must inject the app-appropriate keystroke:
 
 - Default **Ctrl+V**.
-- **Terminals** paste with **Ctrl+Shift+V** - matched by `wm_class` against
-  `ui.terminalApps`.
+- **Terminals** paste with **Ctrl+Shift+V** - if the focused window has a
+  `wm_class`, it is lower-cased and matched by substring against lower-cased
+  `ui.terminalApps` entries. The default is `["terminal"]`.
 - `ui.pasteOverrides` (checked first) maps a `wm_class` substring to a combo
   (`ctrl-v` | `ctrl-shift-v` | `shift-insert` | `none`) for apps with non-standard
   shortcuts; `none` skips injection.

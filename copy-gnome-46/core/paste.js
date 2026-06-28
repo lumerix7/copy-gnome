@@ -19,10 +19,14 @@ function device() {
 }
 
 // Press the given modifier keyvals + `key`, then release in reverse order.
-function injectCombo(mods, key) {
+function injectCombo(mods, key, combo, prefix) {
     const pressed = [];
     try {
         const d = device();
+        if (!d || typeof d.notify_keyval !== 'function') {
+            log.warn(`${prefix}paste injection skipped combo=${combo} reason=virtual-keyboard-unavailable`);
+            return false;
+        }
         const t = Clutter.get_current_event_time() * 1000;
         for (const m of mods) {
             d.notify_keyval(t, m, Clutter.KeyState.PRESSED);
@@ -30,8 +34,10 @@ function injectCombo(mods, key) {
         }
         d.notify_keyval(t, key, Clutter.KeyState.PRESSED);
         d.notify_keyval(t, key, Clutter.KeyState.RELEASED);
+        return true;
     } catch (e) {
-        log.warn(`paste injection failed: ${e.message}`);
+        log.warn(`${prefix}paste injection failed combo=${combo} reason=${e.message}`);
+        return false;
     } finally {
         try {
             const d = _device;
@@ -39,7 +45,7 @@ function injectCombo(mods, key) {
             for (const m of pressed.reverse())
                 d?.notify_keyval(t, m, Clutter.KeyState.RELEASED);
         } catch (e) {
-            log.warn(`paste modifier cleanup failed: ${e.message}`);
+            log.warn(`${prefix}paste modifier cleanup failed combo=${combo} reason=${e.message}`);
         }
     }
 }
@@ -47,20 +53,24 @@ function injectCombo(mods, key) {
 // Inject a named paste combo. Wayland has no semantic "paste", so the combo is
 // per-app; the clipboard is always set by the caller regardless, so a wrong/`none`
 // combo just means the user pastes manually. See docs/03-clipboard.md.
-export function paste(combo) {
+export function paste(combo, context = '[paste]') {
+    const prefix = context ? `${context}: ` : '[paste]: ';
     switch (combo) {
         case 'none':
-            return;
+            log.debug(`${prefix}paste injection skipped combo=none`);
+            return true;
         case 'shift-insert':
-            injectCombo([Clutter.KEY_Shift_L], Clutter.KEY_Insert);
-            return;
+            log.debug(`${prefix}paste injection combo=shift-insert`);
+            return injectCombo([Clutter.KEY_Shift_L], Clutter.KEY_Insert, 'shift-insert', prefix);
         case 'ctrl-shift-v':
-            injectCombo([Clutter.KEY_Control_L, Clutter.KEY_Shift_L], Clutter.KEY_v);
-            return;
+            log.debug(`${prefix}paste injection combo=ctrl-shift-v`);
+            return injectCombo([Clutter.KEY_Control_L, Clutter.KEY_Shift_L], Clutter.KEY_v, 'ctrl-shift-v', prefix);
         case 'ctrl-v':
+            log.debug(`${prefix}paste injection combo=ctrl-v`);
+            return injectCombo([Clutter.KEY_Control_L], Clutter.KEY_v, 'ctrl-v', prefix);
         default:
-            injectCombo([Clutter.KEY_Control_L], Clutter.KEY_v);
-            return;
+            log.warn(`${prefix}paste combo ${String(combo)} unsupported; using ctrl-v`);
+            return injectCombo([Clutter.KEY_Control_L], Clutter.KEY_v, 'ctrl-v', prefix);
     }
 }
 
