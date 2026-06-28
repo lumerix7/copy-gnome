@@ -62,6 +62,10 @@ File capture creates exactly one **file** entry from `text/uri-list`/`x-special`
 not wait for, synthesize, or promote a separate `text/plain` path entry. The file entry keeps
 the URI-list reference only; when the user restores it, the target app config decides whether
 to write GNOME's file-copy MIME (`x-special/gnome-copied-files`) or decoded path text.
+If a later `Meta.SelectionSourceMemory` event exposes the previous file path as
+`text/plain`, the monitor drops it only when it exactly matches the decoded current file
+URI-list path; other memory text remains capturable. See
+[file-twin-design](features/clipboard-capture/file-twin-design.md).
 
 URI-list input accepts both standard `file:///absolute/path` and authority-less
 `file:/absolute/path` file URIs; copy-gnome stores and restores URI-list output as

@@ -146,10 +146,13 @@ flowchart TD
     C -- "yes and last.origin=restore" --> X1["drop - log echo"]
     C -- "yes and sourceKind=memory" --> X2["drop - log stale-replay"]
     C -- "yes otherwise" --> X3["suppress repeat - log same-last"]
-    C -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
+    C -- "no" --> D{"file path twin? memory text/plain equals decoded _lastContent file URI-list path"}
+    D -- "yes" --> X4["drop - log file-path-twin"]
+    D -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
     X1 --> H["5 continue until queue empty"]
     X2 --> H
     X3 --> H
+    X4 --> H
     G --> H
 ```
 
@@ -165,13 +168,18 @@ flowchart TD
    - true and `job.sourceKind == 'memory'` → **drop**, log `stale-replay`.
    - true otherwise → **suppress repeat**, log `same-last` (consecutive same content /
      owner re-announce) and notify extension-side bookkeeping.
-   - false → **capture**.
-4. **Capture:** `history.add` using `job.id` as the record id, then
+   - false → check file path twin, then capture if it is not a twin.
+4. **File path twin check:** if `job.sourceKind == 'memory'`, the current payload is
+   `text/plain`, `_lastContent.type == 'file'`, and the text exactly equals the decoded path
+   text for `_lastContent.value` (the current file URI-list), **drop**, log
+   `file-path-twin`. This catches stale memory path twins without blocking unrelated memory
+   text copies.
+5. **Capture:** `history.add` using `job.id` as the record id, then
    `setLastContent({ type, value, origin:'capture', sourceKind:job.sourceKind, source, id:job.id })`.
    For suppressed repeats, extension bookkeeping verifies the current top history record has
    the same kind and payload, then `history.touch(top)` updates `usedAt` and queues the
    normal async snapshot. If top does not match, it warns and skips the touch.
-5. Loop until the queue is empty. Each compare runs against the state the *previous* processed
+6. Loop until the queue is empty. Each compare runs against the state the *previous* processed
    job left, so it is consistent with FIFO order - but note a capture can overwrite a pending
    restore marker (see [Known limitations](#known-limitations)).
 
@@ -180,10 +188,11 @@ flowchart TD
 
 | current sourceKind | type+value == last | last.origin | result                                             |
 |--------------------|--------------------|-------------|----------------------------------------------------|
-| any                | no                 | *           | capture                                            |
+| any                | no                 | *           | capture if not a file-path-twin                    |
 | any                | yes                | restore     | **drop** (echo)                                    |
 | memory             | yes                | capture     | **drop** (stale replay)                            |
 | non-memory         | yes                | capture     | **drop** (same-last)                               |
+| memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=file` and text equals decoded file path |
 
 ## File copies
 

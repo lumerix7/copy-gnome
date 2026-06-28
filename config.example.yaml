@@ -7,8 +7,8 @@
 general:
   captureFiles: true             # copied files are stored as URI/path references only
   captureImages: true            # screenshot/image clipboard capture; risky inside GNOME Shell
-  denyAllMemorySources: true     # skip Shell/Mutter-owned memory sources; useful for testing
-  allowMemoryMimes:              # exact MIME or simple type/* wildcard allowed when denied
+  denyAllMemorySources: false    # legacy safety switch; TODO cleanup after file-twin filtering settles
+  allowMemoryMimes:              # only used when denyAllMemorySources=true
     - image/*
 
 history:

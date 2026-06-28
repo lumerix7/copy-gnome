@@ -14,8 +14,7 @@ copy-gnome disable
 copy-gnome config validate
 copy-gnome config get general.captureImages
 copy-gnome config set general.captureImages false
-copy-gnome config set general.denyAllMemorySources true
-copy-gnome config set general.allowMemoryMimes '["image/*"]'
+copy-gnome config get general.denyAllMemorySources
 copy-gnome config set ui.fileApps '["org.gnome.nautilus"]'
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
 copy-gnome config set ui.popupTheme auto

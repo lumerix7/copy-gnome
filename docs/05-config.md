@@ -72,8 +72,8 @@ on startup so it's never ambiguous).
 general:
   captureFiles: true                # copied files are stored as URI/path references only
   captureImages: true               # screenshot/image capture; risky inside GNOME Shell
-  denyAllMemorySources: true       # skip Shell/Mutter memory sources
-  allowMemoryMimes: ["image/*"]     # exact MIME or type/* wildcard allowed when denied
+  denyAllMemorySources: false      # legacy safety switch; TODO cleanup after file-twin filtering settles
+  allowMemoryMimes: ["image/*"]     # only used when denyAllMemorySources=true
 
 history:
   maxItems: 30                      # visible history count, max 100

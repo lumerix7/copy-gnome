@@ -1,4 +1,4 @@
-# File copy design
+# File twin design
 
 GNOME 50 uses a deliberately simple file model: a file copy is one normal history record,
 and paste/restore decides which clipboard MIME to write.
@@ -47,11 +47,26 @@ Restore writes exactly one clipboard MIME for a file record:
 MIME; other apps receive path text unless the user opts them into file-target behavior.
 
 
-## Memory sources
+## Memory path twins
 
-`Meta.SelectionSourceMemory` is not trusted as a file path twin. It may be a Shell write,
-restore echo, screenshot, empty selection, or stale compositor-owned content. The optional
-`general.denyAllMemorySources` flag filters memory sources at enqueue time. Only MIME
-types matching `general.allowMemoryMimes` (exact MIME or simple `type/*` wildcard, default
-`image/*`) are kept in the queued job; if none match, the memory source is skipped.
-Non-memory sources are not filtered by this option.
+`Meta.SelectionSourceMemory` is not by itself a reason to drop content: desktop file copies
+and ordinary text copies can both arrive as memory sources. The file-twin rule is about the
+relationship between the current payload and the current `_lastContent` file record, not
+about a source-kind allow/deny policy.
+
+`general.denyAllMemorySources` now defaults to `false`. If it is enabled, the enqueue-side
+MIME filter may skip memory sources before this rule runs. That filter is a legacy safety
+switch, not the definition of a file path twin; keep it marked for cleanup after the
+file-path-twin filtering behavior is proven stable.
+
+When memory sources are allowed, desktop/file-manager copies can emit a stale `text/plain`
+path from the previous file before the real file MIME event arrives. That path is not a
+separate user text copy. Drop it only when all of these are true:
+
+- current `job.sourceKind == 'memory'`
+- current payload type is `text/plain`
+- current `_lastContent.type == 'file'` (`_lastContent.value` is the normalized URI-list
+  captured/restored from `text/uri-list` or `x-special/gnome-copied-files`)
+- current text exactly equals the decoded path text for `_lastContent.value`
+
+Log this as `file-path-twin`. Other memory text remains capturable.

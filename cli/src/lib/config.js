@@ -8,7 +8,7 @@ export const DEFAULTS = {
   general: {
     captureFiles: true,
     captureImages: true,
-    denyAllMemorySources: true,
+    denyAllMemorySources: false,
     allowMemoryMimes: ["image/*"],
   },
   history: {

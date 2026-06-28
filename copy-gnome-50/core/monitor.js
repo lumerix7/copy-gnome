@@ -133,6 +133,33 @@ function normalizeUriList(text) {
         .join('\n');
 }
 
+function fileUriPath(uri) {
+    if (typeof uri !== 'string')
+        return null;
+    if (uri.startsWith('file://'))
+        return uri.replace(/^file:\/\//, '');
+    if (/^file:\/(?!\/)/.test(uri))
+        return uri.replace(/^file:/, '');
+    return null;
+}
+
+function uriListPathText(uriList) {
+    if (typeof uriList !== 'string')
+        return '';
+    const paths = [];
+    for (const line of uriListEntries(uriList)) {
+        const pathPart = fileUriPath(line);
+        if (pathPart == null)
+            return '';
+        try {
+            paths.push(decodeURIComponent(pathPart));
+        } catch (e) {
+            return '';
+        }
+    }
+    return paths.join('\n');
+}
+
 function parseSpecialCopiedFiles(text) {
     const lines = text
         .split('\n')
@@ -261,6 +288,21 @@ export class Monitor {
         if (job.sourceKind === 'memory')
             return 'stale-replay';
         return 'same-last';
+    }
+
+    _isFilePathTwin(job, text) {
+        try {
+            if (job?.sourceKind !== 'memory' || typeof text !== 'string')
+                return false;
+            const last = this._lastContent;
+            if (!comparableContent(last) || last.type !== 'file')
+                return false;
+            const pathText = uriListPathText(last.value);
+            return pathText !== '' && text === pathText;
+        } catch (e) {
+            log.warn(`${jobCtx(job)}: file path twin check skipped reason=${String(e?.message ?? e)}`);
+            return false;
+        }
     }
 
     _notifySuppressedRepeat(job, candidate, reason) {
@@ -457,6 +499,10 @@ export class Monitor {
                 const text = new TextDecoder().decode(result.bytes);
                 if (text && text.length > 0) {
                     log.debug(`${jobCtx(job)}: source text value="${debugText(text)}"`);
+                    if (this._isFilePathTwin(job, text)) {
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=file-path-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        return;
+                    }
                     const candidate = { kind: 'text', mime: plainMime, value: text };
                     const dropReason = this._dropReason(job, candidate);
                     if (dropReason) {

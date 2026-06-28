@@ -113,8 +113,9 @@ A copied file is represented as one ordinary record:
 
 - `kind=file`: the `text/uri-list` payload in `uri`
 
-No path twin record is created. On restore, the extension either writes the original
-`text/uri-list` or decodes the URI list to path text, depending on target app config. See
+No path twin record is created. On restore, the extension either writes GNOME's file-copy
+MIME (`x-special/gnome-copied-files`) or decodes the URI list to path text, depending on
+target app config. See
 [file-twin-design](features/clipboard-capture/file-twin-design.md).
 
 
