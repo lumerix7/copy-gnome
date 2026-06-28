@@ -39,6 +39,11 @@ function rowHint(i) {
     return `${i + 1}`;
 }
 
+function kindClass(kind) {
+    const normalized = String(kind ?? 'unknown').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'unknown';
+    return `cg-kind cg-kind-${normalized}`;
+}
+
 function previewLabel(rec) {
     if (rec.preview) return rec.preview;
     if (rec.text) return rec.text.replace(/\s+/g, ' ').slice(0, 80);
@@ -229,12 +234,14 @@ function ensureActorVisibleInScrollView(scrollView, actor) {
 }
 
 export class Popup {
-    constructor({ getItems, onActivate, onRemove, onClear, onSave, getUi }) {
+    constructor({ getItems, onActivate, onRemove, onClear, onSave, onSaveRecord, onRevealFile, getUi }) {
         this._getItems = getItems;
         this._onActivate = onActivate;
         this._onRemove = onRemove ?? (() => {});
         this._onClear = onClear ?? (() => {});
         this._onSave = onSave ?? (() => 'idle');
+        this._onSaveRecord = onSaveRecord ?? (() => {});
+        this._onRevealFile = onRevealFile ?? (() => ({ status: 'skipped' }));
         this._getUi = getUi ?? (() => null);
 
         this._backdrop = null;
@@ -691,7 +698,7 @@ export class Popup {
             label.clutter_text.set_single_line_mode(true);
             label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
             box.add_child(label);
-            const kind = new St.Label({ text: rec.kind, style_class: 'cg-kind' });
+            const kind = new St.Label({ text: rec.kind, style_class: kindClass(rec.kind) });
             box.add_child(kind);
             box.add_child(new St.Label({ text: timeLabel(rec), style_class: 'cg-time' }));
             button.set_child(box);
@@ -756,13 +763,21 @@ export class Popup {
             can_focus: false,
         });
         menu.add_child(this._itemMenuButton('Paste', () => this._activate(rec)));
+        if (rec.kind !== 'file') {
+            menu.add_child(this._itemMenuButton('Save as',
+                () => this._saveItemAs(rec)));
+        }
+        if (rec.kind === 'file') {
+            menu.add_child(this._itemMenuButton('Show in Files',
+                () => this._revealItem(rec)));
+        }
         menu.add_child(this._itemMenuButton('Remove', () => this._removeItem(rec),
             'cg-item-menu-danger'));
         this._backdrop.add_child(menu);
         this._itemMenu = menu;
 
         this._positionItemContextMenu(menu, rowButton, event);
-        log.debug(`[popup]: item context menu opened recordId=${rec.id ?? '(none)'}`);
+        log.debug(`[popup]: item context menu opened recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'}`);
     }
 
     _positionItemContextMenu(menu, rowButton, event) {
@@ -807,6 +822,33 @@ export class Popup {
             log.debug(`popup item menu cleanup failed: ${e.message}`);
         }
         this._itemMenu = null;
+    }
+
+    _saveItemAs(rec) {
+        this._clearItemContextMenu();
+        // Hide before delegating: the popup's modal grab would sit in front of the portal
+        // save dialog and swallow its input.
+        log.debug(`[popup]: save as selected recordId=${rec?.id ?? '(none)'} kind=${rec?.kind ?? '(none)'}`);
+        this.hide('save-as');
+        try {
+            this._onSaveRecord(rec);
+        } catch (e) {
+            log.warn(`popup save as failed: ${e.message}`);
+        }
+    }
+
+    _revealItem(rec) {
+        this._clearItemContextMenu();
+        // The popup stays open while the handler checks existence: a stale record shows
+        // the inline hint here; when something exists the handler hides the popup itself
+        // before the file manager takes focus.
+        log.debug(`[popup]: reveal selected recordId=${rec?.id ?? '(none)'} kind=${rec?.kind ?? '(none)'}`);
+        Promise.resolve(this._onRevealFile(rec))
+            .then(result => {
+                if (result?.status === 'missing' && this._visible)
+                    this._showSaveHint('File not found', true);
+            })
+            .catch(e => log.warn(`popup reveal failed: ${e.message}`));
     }
 
     _removeItem(rec) {

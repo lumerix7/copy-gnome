@@ -13,6 +13,9 @@
   guard compares clipboard content directly. Record `id` is a uuid.
 - **UUID**: `copy-gnome@clipboard`.
 - **Multi-version**: one `src/`, built into `copy-gnome-46/` and `copy-gnome-50/`.
+- **CLI history commands**: shipped over the DBus control service (`core/ipc.js`, behind
+  the swappable `IpcTransport`); `list/get/use/copy/paste/search/rm/clear/popup` are in
+  the CLI. See [14-ipc](14-ipc/README.md).
 
 
 ## Risks / things to verify
@@ -42,10 +45,8 @@
    on install? Proposed: commit, so install works without a build step.
 5. Prefs GUI in MVP or defer (YAML-only first)? Proposed: defer GUI, ship YAML + the
    keybinding-capture page only.
-6. CLI: ship it? Proposed **yes**, as a thin client (see [12](12-cli.md)), post-MVP (M5).
-7. CLI transport - **DBus default, behind a swappable `IpcTransport`** so socket can drop
-   in later with no logic/CLI change. (DBus isn't at risk in GNOME; abstraction, not
-   transport choice, is what keeps us flexible.) See [12](12-cli.md).
+6. Prefs GUI details and export/import workflow.
+7. Additional context-menu commands beyond Show/Clear and item Paste/Remove.
 
 
 ## Suggested milestones
@@ -54,4 +55,4 @@
 - **M2**: caret/window popup + search + write-back + keybinding.
 - **M3**: images/blobs + thumbnails + caps/eviction + clipboard persistence.
 - **M4**: privacy/excludes + config hot-reload.
-- **M5**: prefs GUI, edit, export/import, DBus service + CLI, GNOME 50 build.
+- **M5**: prefs GUI, edit, export/import, GNOME 50 build hardening.

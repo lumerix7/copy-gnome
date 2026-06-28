@@ -9,9 +9,10 @@ test("commandNames covers the known command surface", () => {
   for (const n of [
     "status", "doctor", "logs", "enable", "disable", "restart",
     "extension-status", "paths", "config", "repair",
+    "list", "search", "get", "use", "copy", "paste", "rm", "clear", "popup",
   ])
     assert.ok(names.includes(n), `missing command ${n}`);
-  assert.equal(names.length, 10);
+  assert.equal(names.length, 19);
 });
 
 test("generateCompletion rejects non-bash shells", () => {

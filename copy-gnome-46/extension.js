@@ -12,6 +12,9 @@ import { byteLength, encodeUtf8 } from './core/utf8.js';
 import { Store } from './core/store.js';
 import { History } from './core/history.js';
 import { Monitor } from './core/monitor.js';
+import { DBusTransport } from './core/ipc.js';
+import { defaultSaveName, savePlan, saveFileDialog, uriDisplayPath, writeBytesToUri } from './core/save.js';
+import { partitionExistingUris, showInFileManager } from './core/reveal.js';
 import * as Clipboard from './core/clipboard.js';
 import { paste, resetPaste } from './core/paste.js';
 import {
@@ -189,6 +192,8 @@ export default class CopyGnomeExtension extends Extension {
             onRemove: rec => this._history.remove(rec.id),
             onClear: () => this._history.clear(),
             onSave: () => this._flushFromPopup(),
+            onSaveRecord: rec => this._saveRecord(rec),
+            onRevealFile: rec => this._revealFile(rec),
             getUi: () => this._uiConfig(),
         });
 
@@ -235,6 +240,11 @@ export default class CopyGnomeExtension extends Extension {
             });
         }
 
+        // DBus control channel for the CLI (docs/14-ipc). Fail-closed: a failed export
+        // only loses the CLI history commands; the extension keeps running.
+        this._ipc = new DBusTransport();
+        this._ipc.start(this._ipcHandlers());
+
         log.info('enabled');
     }
 
@@ -275,6 +285,11 @@ export default class CopyGnomeExtension extends Extension {
         this._timers.clear();
 
         try {
+            this._ipc?.stop();
+        } catch (e) {
+            log.warn(`ipc stop failed: ${e.message}`);
+        }
+        try {
             this._monitor?.stop();
         } catch (e) {
             log.warn(`monitor stop failed: ${e.message}`);
@@ -301,6 +316,7 @@ export default class CopyGnomeExtension extends Extension {
             log.warn(`paste reset failed: ${e.message}`);
         }
 
+        this._ipc = null;
         this._monitor = null;
         this._popup = null;
         this._indicator = null;
@@ -490,10 +506,15 @@ export default class CopyGnomeExtension extends Extension {
         }
     }
 
+    /**
+     * Restore `rec` to the clipboard and float it to the top. Returns true only after the
+     * clipboard write (or a valid recent-top skip) and the MRU touch both happened.
+     * `opts.autoPaste === false` suppresses the auto-paste injection (CLI restores).
+     */
     async _restore(rec, targetWindow = null, opts = {}) {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
-                return;
+                return false;
             const recentTop = this._recentTopRestoreWindow(rec, this._config?.ui?.skipClipboardWriteForRecentTopSec ?? 0);
             // Usually restore writes to the real system clipboard first. The recent row-1
             // shortcut skips only that write; validation, MRU touch, and paste continue.
@@ -527,7 +548,7 @@ export default class CopyGnomeExtension extends Extension {
                 const plain = plainTextPayload(rec);
                 if (!rich || !plain) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=rich reason=missing-payload`);
-                    return;
+                    return false;
                 }
                 const mode = this._resolveRichTextMode(targetWindow, opts?.mode);
                 if (mode.mode === 'rich') {
@@ -555,17 +576,17 @@ export default class CopyGnomeExtension extends Extension {
             } else if (rec.kind === 'image') {
                 if (!this._config.general.captureImages) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=disabled`);
-                    return;
+                    return false;
                 }
                 const payload = binaryPayload(rec);
                 if (!payload) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=missing-payload`);
-                    return;
+                    return false;
                 }
                 const u8 = GLib.base64_decode(payload.value);
                 if (!u8) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=image reason=invalid-base64`);
-                    return;
+                    return false;
                 }
                 if (skipWrite('image'))
                     wrote = true;
@@ -576,12 +597,12 @@ export default class CopyGnomeExtension extends Extension {
             } else if (rec.kind === 'file') {
                 if (!this._config.general.captureFiles) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=disabled`);
-                    return;
+                    return false;
                 }
                 const payload = uriListPayload(rec);
                 if (!payload) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=file reason=missing-payload`);
-                    return;
+                    return false;
                 }
                 const restoreUri = normalizeUriListForRestore(payload.value);
                 const wmClass = this._targetWmClass(targetWindow);
@@ -603,7 +624,7 @@ export default class CopyGnomeExtension extends Extension {
                     const pathText = filePathText(restoreUri);
                     if (!pathText) {
                         log.warn(`[restore]: file restore skipped recordId=${rec.id} reason=no-path-text uriList="${debugValue(restoreUri)}"`);
-                        return;
+                        return false;
                     }
                     if (skipWrite('text'))
                         wrote = true;
@@ -617,7 +638,7 @@ export default class CopyGnomeExtension extends Extension {
                 const payload = plainTextPayload(rec);
                 if (!payload) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=text reason=missing-payload`);
-                    return;
+                    return false;
                 }
                 if (skipWrite('text'))
                     wrote = true;
@@ -630,12 +651,12 @@ export default class CopyGnomeExtension extends Extension {
                 const payload = binaryPayload(rec);
                 if (!payload) {
                     log.warn(`[restore]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-payload`);
-                    return;
+                    return false;
                 }
                 const u8 = GLib.base64_decode(payload.value);
                 if (!u8) {
                     log.warn(`[restore]: skipped recordId=${rec.id} kind=${rec.kind ?? 'binary'} reason=invalid-base64`);
-                    return;
+                    return false;
                 }
                 if (skipWrite('binary'))
                     wrote = true;
@@ -648,22 +669,99 @@ export default class CopyGnomeExtension extends Extension {
             if (!wrote) {
                 this._monitor.setLastContentIfIs(backup);
                 log.warn(`[restore]: aborted recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=clipboard-write-failed`);
-                return;
+                return false;
             }
 
             if (!this._enabled || !this._history)
-                return;
+                return false;
             // Move the used entry to the front (MRU).
             this._history.touch(rec);
             log.info(`[restore]: restored recordId=${rec.id} kind=${rec.kind} bytes=${rec.bytes}`);
 
             // Optionally paste into the focused window after focus returns.
-            if (this._config.ui.autoPaste)
-                this._schedulePaste(targetWindow, rec);
-            else
+            if (!this._config.ui.autoPaste)
                 log.debug(`[paste]: skipped recordId=${rec.id} reason=autoPaste-disabled`);
+            else if (opts?.autoPaste === false)
+                log.debug(`[paste]: skipped recordId=${rec.id} reason=caller-opt-out`);
+            else
+                this._schedulePaste(targetWindow, rec);
+            return true;
         } catch (e) {
             log.warn(`restore failed: ${e.message}`);
+            return false;
+        }
+    }
+
+    // Save a record to disk via the portal save dialog (docs/07-ui.md); every kind except
+    // `file`. The popup has already closed itself; the dialog runs in the portal process,
+    // so the Shell only awaits DBus and file IO here.
+    async _saveRecord(rec) {
+        try {
+            if (!this._enabled || !rec || rec.kind === 'file')
+                return;
+            const plan = savePlan(rec);
+            if (!plan) {
+                log.warn(`[save]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-saveable-payload`);
+                return;
+            }
+            const suggestedName = defaultSaveName(rec.kind, rec.createdAt, plan.extension);
+            log.debug(`[save]: dialog recordId=${rec.id} kind=${rec.kind} mime=${rec.mime} bytes=${plan.bytes.length} suggestedName=${suggestedName}`);
+            const uri = await saveFileDialog({ suggestedName });
+            if (!uri) {
+                log.debug(`[save]: cancelled recordId=${rec.id}`);
+                return;
+            }
+            if (!this._enabled)
+                return;
+            const ok = await writeBytesToUri(uri, plan.bytes);
+            if (ok) {
+                log.info(`[save]: saved recordId=${rec.id} kind=${rec.kind} bytes=${plan.bytes.length} uri=${uri}`);
+                Main.notify('copy-gnome', `Saved: ${uriDisplayPath(uri)}`);
+            } else {
+                Main.notify('copy-gnome', 'Save failed - see the journal for [save] lines');
+            }
+        } catch (e) {
+            log.warn(`save record failed: ${e.message}`);
+        }
+    }
+
+    // "Show in Files" for a file record (docs/07-ui.md). Existence is checked while the
+    // popup is still open: all-missing returns {status:'missing'} so the popup shows its
+    // inline hint; otherwise the popup is hidden here and the existing uris are revealed
+    // in the session file manager.
+    async _revealFile(rec) {
+        try {
+            if (!this._enabled || rec?.kind !== 'file')
+                return { status: 'skipped' };
+            const payload = uriListPayload(rec);
+            const uris = payload
+                ? normalizeUriListForRestore(payload.value).split('\n').filter(Boolean)
+                : [];
+            if (!uris.length) {
+                log.warn(`[reveal]: skipped recordId=${rec.id ?? '(none)'} reason=no-uris`);
+                return { status: 'missing' };
+            }
+            const { existing, missing } = await partitionExistingUris(uris);
+            log.debug(`[reveal]: recordId=${rec.id} uris=${uris.length} existing=${existing.length} missing=${missing.length}`);
+            if (!existing.length) {
+                log.info(`[reveal]: all files missing recordId=${rec.id} uris=${uris.length}`);
+                return { status: 'missing' };
+            }
+            if (!this._enabled)
+                return { status: 'skipped' };
+            this._popup?.hide('reveal');
+            const shown = await showInFileManager(existing);
+            if (!shown) {
+                Main.notify('copy-gnome', 'Could not open the file manager');
+                return { status: 'failed' };
+            }
+            if (missing.length)
+                Main.notify('copy-gnome', `${missing.length} of ${uris.length} files no longer exist`);
+            log.info(`[reveal]: shown recordId=${rec.id} uris=${existing.length}`);
+            return { status: 'shown' };
+        } catch (e) {
+            log.warn(`reveal file failed: ${e.message}`);
+            return { status: 'failed' };
         }
     }
 
@@ -809,5 +907,175 @@ export default class CopyGnomeExtension extends Extension {
                 };
         }
         return { ...fallback, wmClass, normalized: hay };
+    }
+
+    // ---- IPC handlers (docs/14-ipc) ------------------------------------------------
+    // Each handler returns a JSON-serializable envelope; the transport catches throws,
+    // so a handler bug degrades to an { ok: false } reply instead of a Shell error.
+
+    _ipcHandlers() {
+        const guard = fn => (...args) => {
+            if (!this._enabled || !this._history || !this._monitor || !this._config)
+                return { ok: false, code: 'not-ready', error: 'extension not ready' };
+            return fn(...args);
+        };
+        return {
+            List: guard(limit => this._ipcList(limit)),
+            Get: guard(id => this._ipcGet(id)),
+            Use: guard((id, mode) => this._ipcUse(id, mode)),
+            CopyText: guard(text => this._ipcCopyText(text)),
+            GetClipboardText: guard(() => this._ipcGetClipboardText()),
+            Search: guard((query, limit) => this._ipcSearch(query, limit)),
+            Remove: guard(id => this._ipcRemove(id)),
+            Clear: guard(() => this._ipcClear()),
+            Popup: guard(() => this._ipcPopup()),
+            Status: () => this._ipcStatus(),
+        };
+    }
+
+    _ipcItem(rec, { withPayloads = false } = {}) {
+        const item = {
+            id: rec.id,
+            kind: rec.kind,
+            mime: rec.mime,
+            bytes: rec.bytes,
+            preview: rec.preview,
+            createdAt: rec.createdAt,
+            usedAt: rec.usedAt,
+        };
+        if (withPayloads) {
+            item.payloads = (rec.payloads ?? []).map(p => ({
+                mime: p.mime,
+                encoding: p.encoding,
+                bytes: p.bytes,
+                value: p.value,
+            }));
+        }
+        return item;
+    }
+
+    /** Resolve an entry by exact id, or by a unique id prefix of at least 4 chars. */
+    _ipcFind(id) {
+        const key = String(id ?? '').trim();
+        if (!key)
+            return { error: { ok: false, code: 'bad-args', error: 'empty id' } };
+        const records = this._history.list();
+        const exact = records.find(r => r.id === key);
+        if (exact)
+            return { rec: exact };
+        if (key.length >= 4) {
+            const matches = records.filter(r => typeof r.id === 'string' && r.id.startsWith(key));
+            if (matches.length === 1)
+                return { rec: matches[0] };
+            if (matches.length > 1)
+                return { error: { ok: false, code: 'ambiguous', error: `id prefix "${key}" matches ${matches.length} entries` } };
+        }
+        return { error: { ok: false, code: 'not-found', error: `no entry with id ${key}` } };
+    }
+
+    _ipcList(limit) {
+        const all = this._history.list();
+        const items = limit > 0 ? all.slice(0, limit) : all;
+        return { ok: true, total: all.length, items: items.map(r => this._ipcItem(r)) };
+    }
+
+    _ipcGet(id) {
+        const { rec, error } = this._ipcFind(id);
+        if (error)
+            return error;
+        return { ok: true, item: this._ipcItem(rec, { withPayloads: true }) };
+    }
+
+    async _ipcUse(id, mode) {
+        const { rec, error } = this._ipcFind(id);
+        if (error)
+            return error;
+        const explicitMode = mode === 'rich' || mode === 'plain' ? mode : null;
+        const ok = await this._restore(rec, null, { autoPaste: false, mode: explicitMode });
+        if (!ok)
+            return { ok: false, code: 'restore-failed', error: 'restore failed; check the journal for [restore] lines' };
+        return { ok: true, id: rec.id, kind: rec.kind };
+    }
+
+    _ipcCopyText(text) {
+        const value = String(text ?? '');
+        if (!value)
+            return { ok: false, code: 'bad-args', error: 'empty text' };
+        const size = byteLength(value);
+        const cfg = this._config;
+        const cap = Math.min(cfg.history.maxItemBytes, cfg.storage.textMaxBytes);
+        if (size > cap)
+            return { ok: false, code: 'too-large', error: `${size} bytes exceeds the ${cap} byte text cap` };
+        // Same self-write dance as _restore: mark before writing so the monitor drops the
+        // echo, roll the marker back if the write failed.
+        const backup = this._monitor.getLastContent();
+        this._monitor.setLastContent({ origin: 'restore', type: 'text', value, sourceKind: 'memory', source: '(cli-copy)' });
+        if (!Clipboard.setText(value)) {
+            this._monitor.setLastContentIfIs(backup);
+            return { ok: false, code: 'clipboard-write-failed', error: 'clipboard write failed' };
+        }
+        const rec = this._history.add({
+            kind: 'text',
+            mime: PLAIN_TEXT_MIME,
+            bytes: size,
+            preview: textPreview(value),
+            payloads: [makeTextPayload(PLAIN_TEXT_MIME, value, size)],
+        });
+        log.info(`[ipc]: copy recordId=${rec.id} bytes=${size}`);
+        return { ok: true, id: rec.id, bytes: size };
+    }
+
+    async _ipcGetClipboardText() {
+        const text = await Clipboard.getText();
+        return { ok: true, hasText: text != null, text: text ?? '' };
+    }
+
+    _ipcSearch(query, limit) {
+        const q = String(query ?? '').toLowerCase();
+        if (!q)
+            return { ok: false, code: 'bad-args', error: 'empty query' };
+        const matches = this._history.list().filter(rec => this._ipcSearchText(rec).includes(q));
+        const items = limit > 0 ? matches.slice(0, limit) : matches;
+        return { ok: true, total: matches.length, items: items.map(r => this._ipcItem(r)) };
+    }
+
+    _ipcSearchText(rec) {
+        const parts = [rec.preview ?? ''];
+        for (const p of rec.payloads ?? []) {
+            if (p?.encoding === 'utf8' || p?.encoding === 'uri-list')
+                parts.push(p.value ?? '');
+        }
+        return parts.join('\n').toLowerCase();
+    }
+
+    _ipcRemove(id) {
+        const { rec, error } = this._ipcFind(id);
+        if (error)
+            return error;
+        this._history.remove(rec.id);
+        return { ok: true, id: rec.id };
+    }
+
+    _ipcClear() {
+        const count = this._history.list().length;
+        this._history.clear();
+        return { ok: true, cleared: count };
+    }
+
+    _ipcPopup() {
+        if (!this._popup)
+            return { ok: false, code: 'not-ready', error: 'popup not ready' };
+        this._popup.toggle();
+        return { ok: true };
+    }
+
+    _ipcStatus() {
+        return {
+            ok: true,
+            uuid: UUID,
+            version: String(this.metadata?.version ?? ''),
+            ready: !!this._ready,
+            count: this._history ? this._history.list().length : 0,
+        };
     }
 }

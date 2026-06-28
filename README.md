@@ -18,6 +18,10 @@ standalone clipboard managers can't monitor the clipboard).
   - number keys paste rows by number, e.g. **1**, **11**; standalone **0** means row 10,
   - **Ctrl+F** focuses search; digits typed in search filter the list,
   - `↑/↓` or mouse hover to select, **single-click** to paste,
+  - right-click a row for the item menu; all rows except copied files offer **Save as**
+    (portal save dialog, default name `clip-<kind>-YYYYMMDD_HHMMSS.<ext>`), copied-file
+    rows offer **Show in Files** (reveal in the session default file manager; missing
+    files show a hint instead of a file-manager error),
   - every paste restores the entry, moves it to front, and (default) injects Ctrl+V
     into the focused window; recent row-1 restores can skip only the system clipboard
     rewrite for a short configured window.
@@ -62,9 +66,25 @@ copy-gnome repair --yes        # backup + truncate a bad JSONL tail line
 copy-gnome --completion bash   # print bash completion
 ```
 
+History commands talk to the running extension over its DBus service
+([docs/14-ipc](docs/14-ipc/README.md)) and support scripting CopyQ-style:
+
+```sh
+copy-gnome list --limit 10
+copy-gnome search 'error' --json
+copy-gnome get 1a2b3c4d            # unique id prefix from `list`
+copy-gnome use 1a2b3c4d            # restore to clipboard, float to top
+echo -n "hello" | copy-gnome copy  # new entry + clipboard write
+copy-gnome paste > clipboard.txt
+copy-gnome rm 1a2b3c4d
+copy-gnome clear --yes
+copy-gnome popup                   # toggle the history popup
+```
+
 The CLI is a normal Node package (`@clipboard/copy-gnome`) with the `copy-gnome` binary.
 It does not import GNOME Shell or extension runtime code, so `doctor`, `logs`, `config`,
-`disable`, and `repair` remain useful when the extension is broken.
+`disable`, and `repair` remain useful when the extension is broken; the history commands
+above need the extension running and exit with code 3 otherwise.
 `scripts/install-cli.sh` installs bash completion to the user-level bash-completion
 directory when generation succeeds.
 

@@ -39,6 +39,7 @@ DBus-service + GTK app.
 | 11 | [open-questions](11-open-questions.md)   | Decisions to confirm, risks                                        |
 | 12 | [cli](12-cli.md)                         | CLI + DBus interface + doctor diagnostics                          |
 | 13 | [rich-text](13-rich-text/README.md)      | Rich text capture, payloads, target app paste policy               |
+| 14 | [ipc](14-ipc/README.md)                  | DBus control service, JSON envelope, CLI history commands          |
 | 99 | [troubleshooting](99-troubleshooting.md) | Known log noise and diagnosis notes                                |
 
 

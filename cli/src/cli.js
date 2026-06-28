@@ -14,8 +14,9 @@ import {
   validateConfig,
 } from "./lib/config-command.js";
 import { repairLatestClip } from "./lib/clips.js";
+import { callService, serviceExitCode } from "./lib/ipc.js";
 import { collectLogs, followLogs } from "./lib/logs.js";
-import { dim, error, field, formatHelp, printChecks, printJson, printStatus, success, warn } from "./lib/output.js";
+import { dim, error, field, formatHelp, printChecks, printEntries, printJson, printServiceStatus, printStatus, success, warn } from "./lib/output.js";
 import { resolveDataPaths } from "./lib/paths.js";
 import { commandLine, resultText, run } from "./lib/shell.js";
 import { runDoctor } from "./lib/doctor.js";
@@ -39,7 +40,10 @@ export async function main(argv) {
 
 // Build the commander program without parsing, so tests can inspect the real
 // command/option surface and assert bash completion stays in sync with it.
-export function buildProgram() {
+export function buildProgram(deps = {}) {
+  const serviceCaller = deps.serviceCaller ?? callService;
+  const statusCollector = deps.statusCollector ?? collectStatus;
+  const readStdin = deps.readStdin ?? (encoding => fs.readFileSync(0, encoding));
   const program = new Command();
   program
     .name("copy-gnome")
@@ -48,14 +52,17 @@ export function buildProgram() {
     .option("--completion <shell>", "print a shell completion script, then exit (bash)");
 
   program.command("status")
-    .description("Show extension, config, and storage status")
+    .description("Show extension, config, storage, and service status")
     .option("--json", "print JSON")
     .action(opts => {
-      const status = collectStatus();
-      if (opts.json)
+      const status = statusCollector();
+      status.service = serviceCaller("Status", [], { timeoutSec: 3 });
+      if (opts.json) {
         printJson(status);
-      else
+      } else {
         printStatus(status);
+        printServiceStatus(status.service);
+      }
     });
 
   program.command("doctor")
@@ -146,6 +153,156 @@ export function buildProgram() {
         field("config", paths.config, { pad: 7, indent: 0, color: dim });
         field("data", paths.data, { pad: 7, indent: 0, color: dim });
       }
+    });
+
+  // History commands: thin clients over the extension's DBus service (docs/14-ipc).
+  // They fail with exit code 3 when the service (i.e. the extension) is not running.
+
+  program.command("list")
+    .description("List history entries (most recent first)")
+    .option("--limit <n>", "show at most N entries", parsePositiveInt)
+    .option("--json", "print JSON")
+    .action(opts => {
+      const result = serviceCaller("List", [opts.limit ?? 0]);
+      finishService(result, opts, () => {
+        printEntries(result.items);
+        if (opts.limit && result.total > result.items.length)
+          console.log(dim(`(${result.items.length} of ${result.total} entries)`));
+      });
+    });
+
+  program.command("search")
+    .description("Search history entries by text")
+    .argument("<query>", "case-insensitive substring")
+    .option("--limit <n>", "show at most N matches", parsePositiveInt)
+    .option("--json", "print JSON")
+    .action((query, opts) => {
+      const result = serviceCaller("Search", [query, opts.limit ?? 0]);
+      finishService(result, opts, () => {
+        printEntries(result.items);
+        if (opts.limit && result.total > result.items.length)
+          console.log(dim(`(${result.items.length} of ${result.total} matches)`));
+      });
+    });
+
+  program.command("get")
+    .description("Print one entry's content to stdout")
+    .argument("<id>", "entry id (a unique prefix of 4+ chars works)")
+    .option("--raw", "write the primary payload as-is (base64 payloads are decoded)")
+    .option("--json", "print the full entry as JSON")
+    .action((id, opts) => {
+      const result = serviceCaller("Get", [id]);
+      finishService(result, opts, () => {
+        const item = result.item;
+        if (opts.raw) {
+          const payload = item.payloads?.[0];
+          if (!payload) {
+            error("entry has no payload");
+            process.exitCode = 1;
+            return;
+          }
+          if (payload.encoding === "base64")
+            process.stdout.write(Buffer.from(payload.value, "base64"));
+          else
+            process.stdout.write(payload.value ?? "");
+          return;
+        }
+        const text = entryText(item);
+        if (text == null) {
+          error(`entry ${item.id} is ${item.kind}; use --raw to write its payload`);
+          process.exitCode = 1;
+          return;
+        }
+        writeText(text);
+      });
+    });
+
+  program.command("use")
+    .description("Restore an entry to the clipboard and move it to the front")
+    .argument("<id>", "entry id (a unique prefix of 4+ chars works)")
+    .option("--mode <mode>", "rich entries only: paste mode, rich or plain")
+    .option("--json", "print JSON")
+    .action((id, opts) => {
+      const mode = opts.mode ?? "";
+      if (mode && mode !== "rich" && mode !== "plain") {
+        error(`invalid --mode: ${mode} (expected rich or plain)`);
+        process.exitCode = 2;
+        return;
+      }
+      const result = serviceCaller("Use", [id, mode]);
+      finishService(result, opts, () => success(`restored ${result.id} (${result.kind})`));
+    });
+
+  program.command("copy")
+    .description("Set the clipboard (and add a history entry) from text or stdin")
+    .argument("[text...]", "text to copy; omit or pass - to read stdin")
+    .option("--json", "print JSON")
+    .action((texts, opts) => {
+      let text;
+      if (!texts.length || (texts.length === 1 && texts[0] === "-")) {
+        try {
+          text = readStdin("utf8");
+        } catch (err) {
+          error(`reading stdin failed: ${err.message}`);
+          process.exitCode = 2;
+          return;
+        }
+      } else {
+        text = texts.join(" ");
+      }
+      if (!text) {
+        error("nothing to copy");
+        process.exitCode = 2;
+        return;
+      }
+      const result = serviceCaller("CopyText", [text]);
+      finishService(result, opts, () => success(`copied ${result.bytes} bytes ${dim(`(id ${result.id})`)}`));
+    });
+
+  program.command("paste")
+    .description("Print the current clipboard text to stdout")
+    .option("--json", "print JSON")
+    .action(opts => {
+      const result = serviceCaller("GetClipboardText");
+      finishService(result, opts, () => {
+        if (!result.hasText) {
+          error("no text on the clipboard");
+          process.exitCode = 1;
+          return;
+        }
+        writeText(result.text);
+      });
+    });
+
+  program.command("rm")
+    .description("Remove one history entry")
+    .argument("<id>", "entry id (a unique prefix of 4+ chars works)")
+    .option("--json", "print JSON")
+    .action((id, opts) => {
+      const result = serviceCaller("Remove", [id]);
+      finishService(result, opts, () => success(`removed ${result.id}`));
+    });
+
+  program.command("clear")
+    .description("Clear the whole history")
+    .option("-y, --yes", "confirm; without it, clear refuses to run")
+    .option("--json", "print JSON")
+    .action(opts => {
+      if (!opts.yes) {
+        error("refusing to clear history without --yes");
+        process.exitCode = 2;
+        return;
+      }
+      const result = serviceCaller("Clear");
+      finishService(result, opts, () => success(`cleared ${result.cleared} entries`));
+    });
+
+  program.command("popup")
+    .description("Toggle the history popup (same as the keybinding)")
+    .option("--json", "print JSON")
+    .action(opts => {
+      const result = serviceCaller("Popup");
+      finishService(result, opts, () => success("popup toggled"));
     });
 
   const config = program.command("config")
@@ -280,6 +437,40 @@ function completionShellFromArgv(argv) {
   if (idx < 0)
     return null;
   return argv[idx + 1] || "";
+}
+
+// Shared tail for service-backed commands: --json prints the raw envelope; otherwise
+// failures map to docs/12-cli exit codes and successes run the human formatter.
+function finishService(result, opts, onOk) {
+  if (opts?.json) {
+    printJson(result);
+    process.exitCode = serviceExitCode(result);
+    return;
+  }
+  if (!result.ok) {
+    error(result.error || `service call failed (${result.code || "unknown"})`);
+    process.exitCode = serviceExitCode(result);
+    return;
+  }
+  onOk();
+}
+
+// Text to print for `get` without --raw: prefer the plain-text payload, then any other
+// text-like payload (rich primary, file uri-list); binary-only entries return null.
+function entryText(item) {
+  const payloads = item.payloads || [];
+  const plain = payloads.find(p => typeof p.mime === "string" && p.mime.startsWith("text/plain"));
+  if (plain)
+    return plain.value ?? "";
+  const textLike = payloads.find(p => p.encoding === "utf8" || p.encoding === "uri-list");
+  return textLike ? textLike.value ?? "" : null;
+}
+
+// Exact bytes for pipes; only a TTY gets a cosmetic trailing newline.
+function writeText(text) {
+  process.stdout.write(text);
+  if (process.stdout.isTTY && text && !text.endsWith("\n"))
+    process.stdout.write("\n");
 }
 
 function parsePositiveInt(value) {

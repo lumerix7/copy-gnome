@@ -8,6 +8,10 @@
   `history.maxAgeDays` (default 3). It runs only after history load and never from
   `disable()`; it deletes whole files by date and never rewrites contents. Details in
   [docs/04-storage.md](docs/04-storage.md#cleanup).
+- The DBus control service (`core/ipc.js`, consumed by the CLI history commands) starts
+  only at the end of runtime start (after history load) and is unexported in `disable()`.
+  IPC handlers never throw into the Shell: the transport wraps every call and errors
+  become `{ok:false}` JSON envelopes. Details in [docs/14-ipc](docs/14-ipc/README.md).
 
 
 ## Tips

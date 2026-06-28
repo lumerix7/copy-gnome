@@ -211,3 +211,51 @@ export function printStatus(status) {
   field("Latest clips", status.clips.file || "none", { color: status.clips.file ? undefined : dim });
   field("Clips health", status.clips.message);
 }
+
+// "Service" section appended to `status`: the live DBus Status() reply, or why it failed.
+export function printServiceStatus(service) {
+  console.log("");
+  heading("Service");
+  field("Available", !!service.ok, { color: yesNo });
+  if (service.ok) {
+    field("Ready", !!service.ready, { color: yesNo });
+    field("Entries", String(service.count ?? 0));
+  } else {
+    field("Reason", service.error || service.code || "unknown", { color: dim });
+  }
+}
+
+// History rows for `list` / `search`: number, kind, size, short id, one-line preview.
+// The service resolves unique id prefixes, so the 8-char id shown here is usable as-is.
+export function printEntries(items) {
+  if (!items?.length) {
+    console.log(dim("no entries"));
+    return;
+  }
+  const numWidth = String(items.length).length;
+  for (const [i, item] of items.entries()) {
+    const num = String(i + 1).padStart(numWidth);
+    const kind = chalk.cyan(String(item.kind || "?").padEnd(5));
+    const size = dim(formatBytes(item.bytes).padStart(8));
+    const id = dim(String(item.id || "").slice(0, 8));
+    console.log(`${num}  ${kind} ${size}  ${id}  ${item.preview ?? ""}`);
+  }
+}
+
+export function formatBytes(n) {
+  const bytes = Number(n);
+  if (!Number.isFinite(bytes) || bytes < 0)
+    return "?";
+  if (bytes < 1024)
+    return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes;
+  let unit = "B";
+  for (const next of units) {
+    if (value < 1024)
+      break;
+    value /= 1024;
+    unit = next;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}

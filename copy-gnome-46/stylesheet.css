@@ -181,6 +181,38 @@
     text-align: right;
 }
 
+.cg-popup-dark .cg-kind-text {
+    color: rgba(255, 255, 255, 0.58);
+}
+
+.cg-popup-dark .cg-kind-file {
+    color: #8fd19e;
+}
+
+.cg-popup-dark .cg-kind-rich {
+    color: #8fbfe8;
+}
+
+.cg-popup-dark .cg-kind-image {
+    color: #e4be7a;
+}
+
+.cg-popup-light .cg-kind-text {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+.cg-popup-light .cg-kind-file {
+    color: #2f7d45;
+}
+
+.cg-popup-light .cg-kind-rich {
+    color: #2f6f9f;
+}
+
+.cg-popup-light .cg-kind-image {
+    color: #8a5d16;
+}
+
 .cg-time {
     min-width: 5.4em;
     text-align: right;

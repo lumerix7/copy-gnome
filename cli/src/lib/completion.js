@@ -48,6 +48,48 @@ export const COMMANDS = [
     options: ["--json", "-h", "--help"],
   },
   {
+    name: "list",
+    options: ["--limit", "--json", "-h", "--help"],
+    values: {
+      "--limit": { kind: "choice", words: ["10", "20", "50"] },
+    },
+  },
+  {
+    name: "search",
+    options: ["--limit", "--json", "-h", "--help"],
+  },
+  {
+    name: "get",
+    options: ["--raw", "--json", "-h", "--help"],
+  },
+  {
+    name: "use",
+    options: ["--mode", "--json", "-h", "--help"],
+    values: {
+      "--mode": { kind: "choice", words: ["rich", "plain"] },
+    },
+  },
+  {
+    name: "copy",
+    options: ["--json", "-h", "--help"],
+  },
+  {
+    name: "paste",
+    options: ["--json", "-h", "--help"],
+  },
+  {
+    name: "rm",
+    options: ["--json", "-h", "--help"],
+  },
+  {
+    name: "clear",
+    options: ["-y", "--yes", "--json", "-h", "--help"],
+  },
+  {
+    name: "popup",
+    options: ["--json", "-h", "--help"],
+  },
+  {
     name: "config",
     options: ["-h", "--help"],
     subcommands: {

@@ -28,6 +28,15 @@ copy-gnome logs [--since 30m] [-n 100] [-f] [--json]
 copy-gnome enable | disable | restart
 copy-gnome extension-status
 copy-gnome paths [--json]
+copy-gnome list [--limit N] [--json]
+copy-gnome search <query> [--limit N] [--json]
+copy-gnome get <id> [--raw] [--json]
+copy-gnome use <id> [--mode rich|plain] [--json]
+copy-gnome copy [text | -] [--json]
+copy-gnome paste [--json]
+copy-gnome rm <id> [--json]
+copy-gnome clear --yes [--json]
+copy-gnome popup [--json]
 copy-gnome config path|validate|show|get|set|edit
 copy-gnome repair [--file PATH] [--yes] [--json]
 copy-gnome --completion bash
@@ -35,10 +44,13 @@ copy-gnome --completion bash
 
 Design boundary: this CLI does **not** import GJS, GNOME Shell modules, or extension
 runtime code. It uses Node plus stable external commands (`gnome-extensions`,
-`gsettings`, `journalctl`) and filesystem checks, so the rescue commands remain useful
-when the Shell extension is disabled, absent, or broken. Future in-memory history actions
-(`list`, `use`, `popup`) still need an IPC service; those are covered by the DBus/socket
-design below.
+`gsettings`, `journalctl`, `busctl`) and filesystem checks, so the rescue commands remain
+useful when the Shell extension is disabled, absent, or broken. The in-memory history
+commands (`list`, `get`, `use`, `copy`, `paste`, `search`, `rm`, `clear`, `popup`) talk
+to the extension's DBus control service - **implemented, see [14-ipc](14-ipc/README.md)**
+- and fail with exit code 3 while that service is unavailable. `status` additionally
+shows a live Service section from the same channel, degrading gracefully; `doctor` stays
+fully offline by design.
 
 `scripts/install-cli.sh` installs bash completion to
 `${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/copy-gnome` by running
@@ -73,14 +85,16 @@ Known GNOME Shell log noise, including Ubuntu Dock keybinding warnings, is docum
 [99-troubleshooting](99-troubleshooting.md).
 
 
-## IPC choice: DBus vs unix socket (decide-later)
+## IPC choice: DBus default, swappable transport
 
 The CLI can't read history directly (it lives inside `gnome-shell`), so it needs an IPC
-channel into the extension. Two viable options - this is **not locked in**:
+channel into the extension. The implemented transport is DBus; the extension-side logic
+still goes through a small `IpcTransport` boundary so the transport can be replaced later
+without changing the handler semantics or CLI-visible envelope.
 
-| | **DBus** (proposed default) | **Unix socket** |
+| | **DBus** (current default) | **Unix socket** |
 |---|---|---|
-| Setup | register a bus name in `enable()` | Future runtime socket path TBD; do not create `$BASE/state` in the Shell path |
+| Setup | register a bus name after runtime start | Future runtime socket path TBD; do not create `$BASE/state` in the Shell path |
 | Tooling | `gdbus`/`busctl` work for free; introspectable | none free - custom line/JSON protocol |
 | Deps | session bus | none; fully self-contained |
 | Cost | bus name + boilerplate | manual message framing |
@@ -91,14 +105,14 @@ channel into the extension. Two viable options - this is **not locked in**:
 > our control channel; both DBus and a unix socket remain fine here.
 
 
-### Decision: DBus default, behind a swappable `IpcTransport`
+### Decision
 
 DBus is **not** at risk of going away in GNOME - the Shell itself is built on it
 (notifications, settings, the extensions API, search providers). The concern worth
-honoring isn't "DBus will be deprecated" but "don't hard-commit to one transport." So:
+honoring isn't "DBus will be deprecated" but "keep the transport boundary small." So:
 
 - The extension logic talks to a thin **`IpcTransport`** interface (`start(handlers)`,
-  `stop()`, `emit(signal, payload)`); the method surface below is the contract.
+  `stop()`, `emit(signal, payload)`); the JSON envelope is the stable contract.
 - The default implementation is **`DBusTransport`** - `Gio.DBusExportedObject.wrapJSObject(xml, impl)`
   is ~10 lines and you get `gdbus call` / `busctl` for free while developing.
 - A **`SocketTransport`** (Gio.SocketService, path TBD) can drop in
@@ -109,7 +123,12 @@ Why DBus first, not socket: the socket's only real edge is "no session-bus depen
 which is moot inside a GNOME session, while it *adds* code and failure modes (stale `.sock`
 after a crash, `EADDRINUSE`, manual message framing, you must hand-write the client). DBus
 is less code and self-documenting. Swappability - not transport choice - is what keeps us
-safe if requirements change. CLI is post-MVP, so this blocks nothing now.
+safe if requirements change.
+
+> **Status: implemented.** `DBusTransport` lives in `core/ipc.js`; the exported method
+> surface, JSON envelope, error codes, and lifecycle are specified in
+> [14-ipc](14-ipc/README.md). Signals (`emit`) are not implemented yet - nothing
+> consumes them.
 
 
 ## Recommendation: yes - a thin CLI over the control channel
@@ -124,28 +143,33 @@ adds zero new storage path.
 
 - Bus: **session bus**, well-known name `org.gnome.Shell.Extensions.CopyGnome`,
   object path `/org/gnome/Shell/Extensions/CopyGnome`.
-- The extension registers the service in `enable()` (via `Gio.DBusExportedObject`) and
-  unexports in `disable()`. When the extension is disabled, the CLI gets a clear
-  "service not available - is the extension enabled?" error.
+- The extension registers the service at the end of runtime start (after history load;
+  via `Gio.DBusExportedObject`) and unexports in `disable()`. When the extension is
+  disabled, the CLI gets a clear "service not available - is the extension enabled?"
+  error.
 - No new daemon: the service lives and dies with the extension.
 
 
-## CLI surface (proposed)
+## CLI surface (implemented)
 
 ```
-copy-gnome list [--limit N] [--json]        # recent entries (id, kind, preview)
+copy-gnome list [--limit N] [--json]        # recent entries (number, kind, size, id, preview)
 copy-gnome get <id> [--raw]                 # print one entry's content to stdout
 copy-gnome copy [text | -]                  # set clipboard from arg or stdin  → new entry
 copy-gnome paste                            # print current clipboard text to stdout
-copy-gnome use <id>                         # restore entry to clipboard (move-to-front)
-copy-gnome search <query> [--json]
-copy-gnome rm <id> | copy-gnome clear [--yes]
-copy-gnome status                           # extension state (count, paths, config)
+copy-gnome use <id> [--mode rich|plain]     # restore entry to clipboard (move-to-front, no auto-paste)
+copy-gnome search <query> [--limit N] [--json]
+copy-gnome rm <id> | copy-gnome clear --yes
+copy-gnome status                           # extension state + live service section
 copy-gnome enable | disable | restart       # enable/disable the Shell extension itself
 copy-gnome extension-status                 # wrapper around gnome-extensions info
 copy-gnome doctor [--json] [--since DURATION]
-copy-gnome popup                            # open the history popup (same as the hotkey)
+copy-gnome popup                            # toggle the history popup (same as the hotkey)
 ```
+
+`<id>` is the record uuid shown by `list`; a unique prefix of 4+ chars is accepted
+(`list` prints the first 8 chars). Method surface, envelope, and error codes:
+[14-ipc](14-ipc/README.md).
 
 Useful config examples:
 
@@ -167,8 +191,8 @@ copy-gnome config set storage.binaryMaxBytes 1048576          # 1 MiB raw image/
   `4` not found.
 - `disable` unloads the extension through GNOME Shell, useful when a Shell-side bug needs a
   quick terminal escape hatch.
-- `doctor` is the first recovery/debug command to implement because it must still work
-  when the extension's own DBus service is unavailable.
+- `doctor` stays offline so it still works when the extension's own DBus service is
+  unavailable.
 
 
 ## Doctor command
@@ -238,14 +262,14 @@ Offline checks, always available:
 - Check common keybinding hazards with `gsettings`, especially `org.gnome.settings-daemon.plugins.media-keys logout`,
   screenshot shortcuts, and the extension's `toggle-popup` keys (planned; only the empty-keybinding case above is implemented yet).
 
-Online checks, only when the extension service is reachable:
+Live service checks are intentionally outside `doctor`:
 
-- DBus name registered and introspectable.
-- `Status` method returns enabled state, history count, data home, config path,
-  active UI settings, and last warning timestamp.
-- `List --limit 1` works from the extension's in-memory history without scanning clips files.
-- `ShowPopup` can be skipped by default; make it explicit with `doctor --interactive` so
-  diagnostics do not unexpectedly grab the keyboard.
+- `copy-gnome status` adds a Service section by calling the DBus `Status` method when the
+  service is reachable, and degrades gracefully when it is not.
+- `copy-gnome list --limit 1 --json` is the non-destructive smoke test for in-memory
+  history access.
+- `copy-gnome popup` is explicit and may grab focus; diagnostics do not call it
+  implicitly.
 
 
 ### Severity
@@ -299,68 +323,31 @@ copy-gnome doctor
 copy-gnome doctor --json
 copy-gnome doctor --since 2h
 copy-gnome doctor --require-active
-copy-gnome doctor --interactive          # may open popup or perform harmless DBus calls
-copy-gnome doctor logs [--since 2h]      # focused log extract for bug reports
-copy-gnome doctor env                    # versions, paths, keybindings, config summary
+```
+
+Focused log and environment commands are separate top-level commands:
+
+```text
+copy-gnome logs --since 2h
+copy-gnome status
+copy-gnome paths
 ```
 
 Keep `doctor` read-only. Any future repair action must be explicit, e.g.
 `copy-gnome repair disable-risky-capture` or `copy-gnome disable`.
 
 
-## DBus method sketch
+## DBus contract and implementation notes
 
-```xml
-<interface name="org.gnome.Shell.Extensions.CopyGnome">
-  <method name="List">
-    <arg type="i" name="limit" direction="in"/>
-    <arg type="s" name="json"  direction="out"/>   <!-- array of {id,kind,preview,bytes,usedAt} -->
-  </method>
-  <method name="Get">       <arg type="s" name="id" direction="in"/>
-                            <arg type="ay" name="bytes" direction="in"/>   <!-- raw -->
-                            <arg type="s"  name="mime"  direction="out"/></method>
-  <method name="Copy">      <arg type="ay" name="bytes" direction="in"/>
-                            <arg type="s"  name="mime"  direction="in"/></method>
-  <method name="Use">       <arg type="s" name="id" direction="in"/></method>
-  <method name="Search">    <arg type="s" name="q" direction="in"/>
-                            <arg type="s" name="json" direction="out"/></method>
-  <method name="Remove">    <arg type="s" name="id" direction="in"/></method>
-  <method name="Clear">     </method>
-  <method name="Status">    <arg type="s" name="json" direction="out"/></method>
-  <method name="ShowPopup"> </method>
-  <signal name="HistoryChanged"> <arg type="s" name="topId"/> </signal>
-</interface>
-```
-
-
-## Implementation notes
-
-- The CLI itself can be a **small GJS script** (uses `Gio.DBusProxy`, no extra deps) or a
-  POSIX `sh` wrapper around `gdbus call`. Prefer the GJS script for clean JSON + binary
-  handling; ship it in `scripts/` and symlink to `~/.local/bin/copy-gnome` at install.
-- For binary content over DBus, pass `ay` (byte array) decoded from the clip's capped
-  inline base64 payload. Oversized non-file binary payloads are skipped before persistence.
-- Security: session bus is per-user already; no extra auth needed. Don't expose anything
-  that bypasses the privacy rules (`Copy` still goes through the normal capture
-  pipeline so excludes apply).
-- `Status` must be cheap and safe: no clips-file scans, no compaction, no thumbnails, no
-  popup creation. It returns only in-memory counters, config summary, data paths, and
-  recent warning/error metadata.
-- Extension lifecycle commands (`enable`, `disable`, `restart`, `extension-status`) should
+- The implemented method surface, DBus signatures, JSON envelope, error codes, and manual
+  `busctl` / `gdbus` debugging commands live in [14-ipc](14-ipc/README.md). Do not keep a
+  second XML sketch here.
+- The Node CLI talks to the service through `busctl --user --json=short`; it does not
+  import GJS or extension runtime code.
+- Extension lifecycle commands (`enable`, `disable`, `restart`, `extension-status`) do
   **not** depend on the extension's DBus service, because that service is unavailable when
-  the extension is disabled or broken. Implement them as a thin wrapper around:
-
-  ```sh
-  gnome-extensions enable copy-gnome@clipboard
-  gnome-extensions disable copy-gnome@clipboard
-  gnome-extensions info copy-gnome@clipboard
-  ```
-
-  This gives a reliable terminal recovery path even when the in-Shell IPC layer is down.
-
-
-## Scope
-
-CLI is **post-MVP** (suggest milestone M5 alongside the prefs GUI). The DBus service is
-small enough that exporting `List/Use/ShowPopup` early is cheap and also lets
-other tools (e.g. custom keybindings, `ydotool` scripts) drive copy-gnome.
+  the extension is disabled or broken. They remain a terminal recovery path even when the
+  in-Shell IPC layer is down.
+- Session bus is a per-user boundary. The service deliberately exposes no config mutation
+  or command execution methods; privacy skips happen at capture time before items can
+  appear in `List` / `Get`.
