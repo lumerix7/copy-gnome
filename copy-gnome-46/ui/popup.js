@@ -83,6 +83,15 @@ function eventCoords(event) {
     }
 }
 
+function eventButton(event) {
+    try {
+        return event.get_button();
+    } catch (e) {
+        log.debug(`event button unavailable: ${e.message}`);
+        return 0;
+    }
+}
+
 function eventInsideActor(actor, event) {
     if (!actor)
         return false;
@@ -669,13 +678,20 @@ export class Popup {
             box.add_child(new St.Label({ text: timeLabel(rec), style_class: 'cg-time' }));
             button.set_child(box);
 
-            // Single click selects then pastes (shell idiom: the `clicked` signal, not
-            // get_click_count). Hover only tints the row via CSS `:hover`; it deliberately
-            // does NOT move the keyboard selection, so a mouse resting near the list can't
-            // fight arrow-key / number navigation.
-            button.connect('clicked', () => {
+            // Single click selects then pastes. Hover only tints the row via CSS `:hover`; it
+            // deliberately does NOT move the keyboard selection, so a mouse resting near the
+            // list can't fight arrow-key / number navigation. Use button-press-event to keep
+            // primary/secondary click semantics explicit for the future context menu.
+            button.connect('button-press-event', (_actor, event) => {
+                const pointerButton = eventButton(event);
+                if (pointerButton !== Clutter.BUTTON_PRIMARY) {
+                    if (pointerButton === Clutter.BUTTON_SECONDARY)
+                        log.debug(`[popup]: row secondary click ignored; context menu pending recordId=${rec.id ?? '(none)'}`);
+                    return Clutter.EVENT_STOP;
+                }
                 this._select(i);
                 this._activate(rec);
+                return Clutter.EVENT_STOP;
             });
             this._listBox.add_child(button);
             this._rows.push({ rec, button });
@@ -683,7 +699,6 @@ export class Popup {
 
         this._select(0);
     }
-
     _select(i) {
         if (i < 0 || i >= this._rows.length) return;
         if (this._selected >= 0 && this._selected < this._rows.length)

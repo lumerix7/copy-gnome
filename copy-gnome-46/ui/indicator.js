@@ -10,7 +10,8 @@ import { log } from '../core/log.js';
 // opens the SAME history widget as the global shortcut - see ui/popup.js. The only
 // difference between the two is placement: the shortcut centers it, the indicator anchors
 // it under this icon. Styling, opacity, search, number quick-paste, clear, and all keyboard
-// logic are identical (one widget, two callers). There are no right-click actions.
+// logic are identical (one widget, two callers). Secondary click is reserved for a future
+// context menu.
 //
 // We pass dontCreateMenu=true so PanelMenu.Button installs a no-op PopupDummyMenu instead of
 // a real (empty) dropdown: that makes a stray empty menu box impossible via pointer,
@@ -51,11 +52,33 @@ class Indicator extends PanelMenu.Button {
         }
     }
 
-    // Open the shared popup on any button press / touch, anchored under this icon. We stop
-    // the event so the parent's default (toggling the dummy menu) never runs.
+    _eventButton(event) {
+        try {
+            return event.get_button();
+        } catch (e) {
+            log.debug(`indicator button unavailable: ${e.message}`);
+            return 0;
+        }
+    }
+
+    vfunc_button_press_event(event) {
+        const pointerButton = this._eventButton(event);
+        if (pointerButton === Clutter.BUTTON_PRIMARY)
+            this._open();
+        else if (pointerButton === Clutter.BUTTON_SECONDARY)
+            log.debug('[indicator]: secondary click ignored; context menu pending');
+        return Clutter.EVENT_STOP;
+    }
+
+    vfunc_button_release_event(_event) {
+        return Clutter.EVENT_STOP;
+    }
+
+    // Open the shared popup on touch, anchored under this icon. Mouse button handling lives in
+    // vfunc_button_press_event/release_event so there is a single pointer path.
     vfunc_event(event) {
         const type = event.type();
-        if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+        if (type === Clutter.EventType.TOUCH_BEGIN) {
             this._open();
             return Clutter.EVENT_STOP;
         }

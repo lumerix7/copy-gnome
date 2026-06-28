@@ -83,6 +83,15 @@ function eventCoords(event) {
     }
 }
 
+function eventButton(event) {
+    try {
+        return event.get_button();
+    } catch (e) {
+        log.debug(`event button unavailable: ${e.message}`);
+        return 0;
+    }
+}
+
 function eventInsideActor(actor, event) {
     if (!actor)
         return false;
@@ -378,7 +387,13 @@ export class Popup {
         // never emit `clicked` (the release is gated on hover). Press events ARE still
         // delivered to descendants (see _onBackdropPress), so drive the two-step confirm off
         // button-press-event. This is the only mouse-only control, hence the only regression.
-        this._clearBtn.connect('button-press-event', () => {
+        this._clearBtn.connect('button-press-event', (_actor, event) => {
+            const pointerButton = eventButton(event);
+            if (pointerButton !== Clutter.BUTTON_PRIMARY) {
+                if (pointerButton === Clutter.BUTTON_SECONDARY)
+                    log.debug('[popup]: clear secondary click ignored; context menu pending');
+                return Clutter.EVENT_STOP;
+            }
             this._onClearClicked();
             return Clutter.EVENT_STOP;
         });
@@ -687,7 +702,13 @@ export class Popup {
             // than St.Button's `clicked`: under GNOME 50's modal grab the backdrop swallows
             // crossing events, so `hover` never goes true and `clicked` never fires (same root
             // cause as the Clear button below).
-            button.connect('button-press-event', () => {
+            button.connect('button-press-event', (_actor, event) => {
+                const pointerButton = eventButton(event);
+                if (pointerButton !== Clutter.BUTTON_PRIMARY) {
+                    if (pointerButton === Clutter.BUTTON_SECONDARY)
+                        log.debug(`[popup]: row secondary click ignored; context menu pending recordId=${rec.id ?? '(none)'}`);
+                    return Clutter.EVENT_STOP;
+                }
                 this._select(i);
                 this._activate(rec);
                 return Clutter.EVENT_STOP;
