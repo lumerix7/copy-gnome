@@ -127,12 +127,9 @@ export class History {
 
     _evict() {
         const o = this._opts;
-        if (o.maxAgeDays > 0) {
-            const cutoff = GLib.get_real_time() - o.maxAgeDays * 86400 * 1e6;
-            for (const r of this._records.slice())
-                if (r.usedAt < cutoff) this._dropQuiet(r.id);
-        }
-
+        // In-memory history is bounded only by maxItems. Age-based retention is a disk-level
+        // policy: the store's periodic sweep deletes old clips-*.jsonl files and never touches
+        // this in-memory set (see store.sweepOldFiles / docs/06-history-model.md).
         const byOldest = () =>
             this._records.slice().sort((a, b) => a.usedAt - b.usedAt);
 

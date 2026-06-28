@@ -14,14 +14,14 @@ general:
 history:
   maxItems: 30                    # visible history count, max 100
   maxItemBytes: 4194304           # 4 MiB default; max 16 MiB
-  maxAgeDays: 0                   # 0 = never expire by age
+  maxAgeDays: 3                   # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
+  cleanupIntervalSec: 86400       # periodic expired-file sweep interval (seconds), 15..864000
 
 storage:
   backend: jsonl
   textMaxBytes: 65536             # 64 KiB; larger text payloads are skipped
   binaryMaxBytes: 16384           # 16 KiB; larger non-file image/binary payloads are skipped
-  flushIntervalSec: 60
-  debounceMs: 500
+  flushIntervalSec: 300           # append latest snapshot once per N sec (the only disk writer)
 
 privacy:
   # Optional: skip clipboard entries that advertise these MIME hints.

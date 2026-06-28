@@ -159,12 +159,13 @@ Hot path:
 3. If conversion or size validation fails, skip the record and warn.
 4. Update in-memory history.
 5. Replace the pending serialized JSON line with the latest full-history snapshot.
-6. Schedule an async append.
+6. Leave it pending; the periodic timer appends it once per `storage.flushIntervalSec`.
 
 Flush policy:
 
-- Append the latest pending snapshot asynchronously after debounce, e.g. 500-1500 ms.
-- Periodic flush, e.g. every 60 seconds, if a pending snapshot exists.
+- The latest pending snapshot is appended **once per `storage.flushIntervalSec`** (default
+  60s) by a periodic timer. There is no per-mutation debounce: copies only overwrite the
+  pending snapshot in memory, so each daily jsonl is written at most once per interval.
 - Periodic flush is append-only. It must not modify existing bytes, rewrite prior lines,
   move files, or compact old data.
 - On `disable()`, only do a tiny best-effort final append. If pending data is too large,
@@ -174,8 +175,8 @@ Flush policy:
 - If an append fails, warn and drop that pending batch. Do not retry forever from
   `gnome-shell`; future captures may append again if the store becomes writable.
 
-This means newest pending lines may be lost on crash, logout, lock-screen teardown, disk
-full, or Shell restart. That is acceptable for this design.
+This means the newest pending snapshot may be lost on a hard crash or power loss (logout /
+`disable()` does a best-effort final flush). That is acceptable for this design.
 
 
 ## Actions and Durability
@@ -200,8 +201,10 @@ Rules:
 - CLI and `doctor` are read-only by default.
 - A future CLI write should go through the extension service instead of writing files
   directly.
-- Any future offline repair/cleanup command that deletes or rewrites files must require
-  the extension to be disabled, or must coordinate through an explicit service command.
+- The Shell writer may delete whole expired daily files by retention policy
+  (`history.maxAgeDays` sweep) without a lock, since it is the sole writer. Any other
+  repair/cleanup that rewrites or truncates file contents must require the extension to be
+  disabled, or coordinate through an explicit service command.
 
 If a future direct multi-process writer is added, introduce a bounded `/tmp` runtime lock
 then. Do not add that complexity to the v1 Shell writer.
@@ -211,24 +214,34 @@ then. Do not add that complexity to the v1 Shell writer.
 
 There is no blob GC because there are no blobs.
 
-There is no old-file cleanup on the normal Shell path. Optional cleanup belongs in
-`doctor cleanup` or a future standalone tool:
+Expired-file retention runs on the normal Shell path as a bounded, fail-closed periodic
+sweep (see `store.sweepOldFiles`, wired in `extension.js`):
 
-- It may delete old daily clips files after user confirmation or explicit retention
-  policy, e.g. keep the newest N days.
-- It may inspect oversized clips files and report them.
-- It may truncate a clips file to remove a corrupted final line, but only after validating
-  the byte offset of the last complete JSONL line.
-- It must require the extension to be disabled or coordinate through the extension service.
-- It must not run during Shell teardown.
+- `history.maxAgeDays` (default 3, 0 = disabled): delete whole daily `clips-*.jsonl` files
+  whose filename date is strictly older than N days.
+- `history.cleanupIntervalSec` (default 86400, range 15..864000): sweep interval.
+- The sweep starts only after `store.open()` + history load; it never runs from
+  `disable()`/teardown. Memory is the session source of truth, so deleting even the
+  just-loaded old file is safe - the next copy re-homes the full snapshot to today's file.
+- It deletes whole files by filename date only. It never parses, rewrites, truncates,
+  compacts, or renames file *contents*, and never touches the in-memory history model.
+- Each delete logs `info`; per-file failures log `warn`; a sweep-level throw logs `error`.
+
+Out of scope for the runtime sweep (still belongs in `doctor cleanup`/repair):
+
+- Inspecting oversized clips files and reporting them.
+- Truncating a clips file to remove a corrupted final line, but only after validating the
+  byte offset of the last complete JSONL line.
+- That repair work must require the extension to be disabled or coordinate through the
+  extension service, and must not run during Shell teardown.
 
 Normal storage code:
 
-- Appends only.
-- Creates a new daily file only when needed for future appends.
-- Never deletes, compacts, rewrites, or renames existing clips files.
+- Appends only; creates a new daily file only when needed for future appends.
+- Deletes whole expired daily files only via the bounded retention sweep above.
+- Never rewrites, truncates, compacts, or renames file contents.
 - Never truncates a bad final line; that is `doctor repair` work.
-- Never delete, compact, or scan old files during Shell teardown.
+- Never runs the sweep or scans old files during Shell teardown.
 
 After `doctor repair` changes a clips file, it can ask the running extension to reload
 history through the extension service, or tell the user to disable/enable the extension.
@@ -250,10 +263,12 @@ The Shell extension itself should not watch old clips files and live-repair them
 
 - Do not create blobs for v1.
 - Do not persist file bytes, even for small files or image files.
-- Do not write on every key event; debounce appends.
+- Do not write on every key event; append at most once per `storage.flushIntervalSec`.
 - Do not rewrite a fixed current/index file.
 - Do not move/copy old clip files on the normal path.
-- Do not delete, compact, rename, or truncate clips files from the Shell extension.
+- Do not compact, rename, or truncate clips files, or rewrite old clip files, from the Shell
+  extension. (Exception: the bounded retention sweep may delete whole expired daily files by
+  filename date - see Cleanup. It never touches file contents.)
 - Do not repair bad final lines from the Shell extension; ignore them and leave repair to
   `doctor repair`.
 - Do not scan the whole clips file on Shell startup.

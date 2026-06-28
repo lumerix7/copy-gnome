@@ -17,14 +17,14 @@ export const DEFAULTS = {
     history: {
         maxItems: 30,
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
-        maxAgeDays: 0,
+        maxAgeDays: 3,              // 0 = keep all daily files; N deletes clips-*.jsonl older than N days
+        cleanupIntervalSec: 86400,  // periodic expired-file sweep interval (seconds), 15..864000
     },
     storage: {
         backend: 'jsonl',
         textMaxBytes: 65536,        // 64 KiB
         binaryMaxBytes: 16384,      // 16 KiB
-        flushIntervalSec: 60,
-        debounceMs: 500,
+        flushIntervalSec: 300,       // append latest snapshot once per N sec (the only disk writer)
     },
     privacy: {
         secretMimes: [],
@@ -64,10 +64,10 @@ const LIMITS = {
     'history.maxItems': [1, 100],
     'history.maxItemBytes': [1024, 16 * 1024 * 1024],
     'history.maxAgeDays': [0, 3650],
+    'history.cleanupIntervalSec': [15, 864000],
     'storage.textMaxBytes': [0, 1024 * 1024],
     'storage.binaryMaxBytes': [0, 1024 * 1024],
     'storage.flushIntervalSec': [5, 3600],
-    'storage.debounceMs': [100, 60000],
     'ui.popupWidth': [240, 900],
     'ui.popupMaxHeight': [120, 1200],
     'ui.popupOffsetX': [-1000, 1000],

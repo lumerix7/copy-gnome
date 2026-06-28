@@ -46,9 +46,10 @@ single item append.
 | `writtenAt` | write time from `GLib.get_real_time()`       |
 | `items`     | sorted record array, newest/MRU first        |
 
-The store writes the newest pending snapshot after the configured debounce. If a snapshot
-line would exceed the internal 64 MiB cap, the store keeps the most-recent prefix that
-fits and syncs the running history to that persisted subset.
+The store appends the newest pending snapshot once per `storage.flushIntervalSec`
+(default 60s); there is no per-mutation write. If a snapshot line would exceed the
+internal 64 MiB cap, the store keeps the most-recent prefix that fits and syncs the
+running history to that persisted subset.
 
 
 ## Record schema
@@ -122,8 +123,11 @@ No path twin record is created. On restore, the extension either writes the orig
 - `history.maxItemBytes` is checked before insertion for text/image payloads.
 - `storage.textMaxBytes` and `storage.binaryMaxBytes` prevent oversized payloads from being
   stored.
-- `history.maxAgeDays` drops old records during insertion when enabled.
-- `history.maxItems` bounds the in-memory array.
+- `history.maxItems` is the only in-memory cap; it bounds the array shown in the popup.
+- `history.maxAgeDays` is a disk-retention policy, not an in-memory eviction: a periodic
+  sweep deletes daily `clips-*.jsonl` files older than N days (default 3, 0 = disabled). It
+  never touches the in-memory model - an old record stays in the popup as long as it remains
+  within `maxItems`. See [04-storage](04-storage.md#cleanup).
 - The store has an additional 64 MiB hard cap per snapshot line.
 
 

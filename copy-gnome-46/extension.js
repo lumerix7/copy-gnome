@@ -74,7 +74,6 @@ export default class CopyGnomeExtension extends Extension {
 
         this._store = new Store({
             dataDir: this._paths.data,
-            opts: this._config.storage,
             // Only sync the trimmed set back if History hasn't changed since the snapshot was
             // taken; otherwise a capture that landed mid-flush would be dropped from memory.
             // The newer pending snapshot will be flushed and re-trimmed, converging safely.
@@ -145,6 +144,27 @@ export default class CopyGnomeExtension extends Extension {
             return GLib.SOURCE_CONTINUE;
         });
 
+        // Periodic retention sweep: delete daily clips-*.jsonl files older than maxAgeDays.
+        // Started only here, after store.open() + history.load() have populated the in-memory
+        // model, and never from disable()/teardown. The sweep is fail-closed and never touches
+        // the in-memory history; deleting even the just-loaded old file is safe because memory
+        // is the session source of truth and the next copy re-homes the snapshot to today's file.
+        const maxAgeDays = this._config.history.maxAgeDays;
+        if (maxAgeDays > 0) {
+            this._store.sweepOldFiles(maxAgeDays)
+                .catch(e => log.error(`cleanup: ${e.message}`));
+            const sweepSec = Math.max(15, this._config.history.cleanupIntervalSec);
+            this._cleanupTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sweepSec, () => {
+                try {
+                    this._store?.sweepOldFiles(maxAgeDays)
+                        .catch(e => log.error(`cleanup: ${e.message}`));
+                } catch (e) {
+                    log.error(`cleanup timer: ${e.message}`);
+                }
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
+
         log.info('enabled');
     }
 
@@ -166,6 +186,14 @@ export default class CopyGnomeExtension extends Extension {
                 log.warn(`flush timer cleanup failed: ${e.message}`);
             }
             this._flushTimer = 0;
+        }
+        if (this._cleanupTimer) {
+            try {
+                GLib.Source.remove(this._cleanupTimer);
+            } catch (e) {
+                log.warn(`cleanup timer cleanup failed: ${e.message}`);
+            }
+            this._cleanupTimer = 0;
         }
         for (const id of this._timers) {
             try {

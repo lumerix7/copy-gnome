@@ -49,7 +49,7 @@ src/
                           mark dirty│            │ sorted index
                                     ▼            ▼
                               store backend   ui/popup, ui/indicator
-                            (async, debounced)
+                             (async, periodic)
 ```
 
 - **`history.js` is the single source of truth.** UI renders from it; the store is a

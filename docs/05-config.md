@@ -78,14 +78,14 @@ general:
 history:
   maxItems: 30                      # visible history count, max 100
   maxItemBytes: 4194304             # 4 MiB default; max 16 MiB
-  maxAgeDays: 0                     # 0 = no age eviction
+  maxAgeDays: 3                     # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
+  cleanupIntervalSec: 86400         # seconds; periodic expired-file sweep interval, 15..864000
 
 storage:
   backend: jsonl                    # jsonl | gda
   textMaxBytes: 65536               # 64 KiB; larger text payloads are skipped
   binaryMaxBytes: 16384             # 16 KiB; larger non-file image/binary payloads are skipped
-  flushIntervalSec: 60              # guaranteed flush of buffered ops to disk
-  debounceMs: 500                   # coalesce write bursts
+  flushIntervalSec: 300             # append latest snapshot once per N seconds (the only writer)
 
 privacy:
   # Optional skip list. Leave empty if password/token copies should remain in history.

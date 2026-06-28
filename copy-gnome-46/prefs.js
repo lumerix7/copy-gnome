@@ -361,9 +361,12 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         group.add(this._spinRow('maxItemBytes', 'Max item size (KiB)', 1, 16384, 1,
             'history', v => Math.round(v / 1024), v => Math.round(v) * 1024,
             'Oversized single items are skipped.'));
-        group.add(this._spinRow('maxAgeDays', 'Expire after days (0 = never)', 0, 3650, 1,
+        group.add(this._spinRow('maxAgeDays', 'Expire files after days (0 = never)', 0, 3650, 1,
             'history', v => v, v => Math.round(v),
-            '0 keeps entries forever by age.'));
+            '0 keeps all daily clips files; N deletes clips-*.jsonl files older than N days.'));
+        group.add(this._spinRow('cleanupIntervalSec', 'Cleanup interval (seconds)', 15, 864000, 60,
+            'history', v => v, v => Math.round(v),
+            'How often to sweep expired files. Default 86400 (24h).'));
 
         page.add(group);
         return page;
@@ -469,12 +472,9 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             title: 'Persistence',
             description: 'Advanced JSONL persistence knobs; leave defaults unless debugging.',
         });
-        persistence.add(this._spinRow('flushIntervalSec', 'Guaranteed flush interval (sec)', 5, 3600, 1,
+        persistence.add(this._spinRow('flushIntervalSec', 'Flush interval (sec)', 5, 3600, 1,
             'storage', v => v, v => Math.round(v),
-            'Periodic write interval for pending history snapshots.'));
-        persistence.add(this._spinRow('debounceMs', 'Write debounce (ms)', 100, 60000, 50,
-            'storage', v => v, v => Math.round(v),
-            'Coalesces rapid history changes into fewer appends.'));
+            'Append the latest history snapshot once per N seconds. The only disk writer.'));
         page.add(persistence);
 
         return page;

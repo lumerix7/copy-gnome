@@ -9,15 +9,18 @@ import { log } from './log.js';
 //   clips-YYYYMMDD.jsonl   append-only, one full sorted history snapshot per line
 //   tmp/                   reserved for future doctor/repair tooling
 //
-// The Shell extension never rewrites, truncates, compacts, deletes, or repairs clips
-// files. If the newest line is bad, startup begins with empty history and leaves repair to a
-// future doctor command.
+// The Shell extension never rewrites, truncates, compacts, or repairs the *contents* of clips
+// files, and never touches the in-memory history model from here. It DOES delete whole expired
+// daily files via sweepOldFiles() (a bounded retention sweep that runs only after history load,
+// never during disable()/teardown). If the newest line is bad, startup begins with empty
+// history and leaves repair to a future doctor command.
 
 Gio._promisify(Gio.File.prototype, 'read_async', 'read_finish');
 Gio._promisify(Gio.InputStream.prototype, 'read_bytes_async', 'read_bytes_finish');
 Gio._promisify(Gio.OutputStream.prototype, 'write_bytes_async', 'write_bytes_finish');
 Gio._promisify(Gio.OutputStream.prototype, 'close_async', 'close_finish');
 Gio._promisify(Gio.File.prototype, 'append_to_async', 'append_to_finish');
+Gio._promisify(Gio.File.prototype, 'delete_async', 'delete_finish');
 
 // Internal hard cap on a single JSONL snapshot line. Fixed for now; intended to become a
 // configurable storage option later.
@@ -58,6 +61,13 @@ function listNames(dirPath) {
 
 function isClipFileName(name) {
     return /^clips-\d{8}\.jsonl$/.test(name);
+}
+
+// Parse the YYYYMMDD date from a clips filename into a local-midnight GLib.DateTime, or null.
+function clipDateFromName(name) {
+    const m = /^clips-(\d{4})(\d{2})(\d{2})\.jsonl$/.exec(name);
+    if (!m) return null;
+    return GLib.DateTime.new_local(Number(m[1]), Number(m[2]), Number(m[3]), 0, 0, 0);
 }
 
 function clipPath(dir, name) {
@@ -128,16 +138,15 @@ function normalizeSnapshot(obj, maxLineBytes) {
 }
 
 export class Store {
-    constructor({ dataDir, opts, onTrim }) {
+    constructor({ dataDir, onTrim }) {
         this._dir = dataDir;
-        this._opts = opts;
         this._onTrim = onTrim ?? (() => {});
         this._tmpDir = GLib.build_filenamev([dataDir, 'tmp']);
         this._pending = null;
-        this._flushSource = 0;
         this._busy = false;
         this._closed = false;
         this._degraded = false;
+        this._sweeping = false;
     }
 
     async open() {
@@ -276,8 +285,10 @@ export class Store {
         // path stays O(1) and never serializes the whole history on every copy/touch. Each call
         // supersedes any unsaved snapshot, so we never queue stale or duplicate work. `gen` is
         // History's change counter at snapshot time, used to detect concurrent edits in flush().
+        // No per-mutation flush: writes happen only on the periodic timer in extension.js
+        // (storage.flushIntervalSec, default 60s) and on disable()/closeSync(). _pending just
+        // holds the latest full snapshot until then; recent captures may be lost on crash.
         this._pending = { target: currentClipName(), records, gen };
-        this._scheduleFlush();
     }
 
     _snapshotItem(rec) {
@@ -350,35 +361,26 @@ export class Store {
         return { records: trimmed, line: this._lineForSnapshot(trimmed), trimmed: true };
     }
 
-    _scheduleFlush() {
-        if (this._flushSource)
-            return;
-        this._flushSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
-            this._opts.debounceMs, () => {
-                this._flushSource = 0;
-                this.flush().catch(e => log.warn(`flush: ${e.message}`));
-                return GLib.SOURCE_REMOVE;
-            });
-    }
-
+    // flush() is driven solely by the periodic timer in extension.js (storage.flushIntervalSec)
+    // and by closeSync() on teardown; there is no per-mutation debounce. If a flush is already in
+    // progress, a concurrent call leaves _pending in place for the next periodic tick.
     async flush() {
         if (this._closed || !this._pending)
             return;
-        if (this._busy) {
-            this._scheduleFlush();
+        if (this._busy)
             return;
-        }
         this._busy = true;
         const batch = this._pending;
         this._pending = null;
         try {
-            // Serialize here (debounced after the last change), not in the capture path.
-            // If the full snapshot exceeds the internal hard cap, trim oldest entries until
-            // it is writable and sync History to that trimmed set. The trimmed batch may be
-            // stale by the time the append resolves; _onTrim guards against that via batch.gen.
+            // Serialize here, not in the capture path. If the full snapshot exceeds the internal
+            // hard cap, trim oldest entries until it is writable and sync History to that trimmed
+            // set. The trimmed batch may be stale by the time the append resolves; _onTrim guards
+            // against that via batch.gen.
             const { records, line, trimmed } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
+            log.debug(`flush: ${records.length} records -> ${batch.target}${trimmed ? ' (trimmed)' : ''}`);
             await this._appendTextAsync(clipPath(this._dir, batch.target), line + '\n');
             if (trimmed)
                 this._onTrim(records, batch.gen);
@@ -392,8 +394,6 @@ export class Store {
             }
         } finally {
             this._busy = false;
-            if (this._pending && !this._closed)
-                this._scheduleFlush();
         }
     }
 
@@ -410,12 +410,47 @@ export class Store {
         }
     }
 
+    // Retention sweep: delete whole daily clips-*.jsonl files whose filename date is strictly
+    // older than `maxAgeDays` days. Bounded and fail-closed: never throws into the timer
+    // callback, never touches the in-memory history (Store holds no reference to it). Runs only
+    // after history load and never from disable()/teardown (see extension.js / WARNING.md).
+    async sweepOldFiles(maxAgeDays) {
+        if (!(maxAgeDays > 0) || this._closed || this._sweeping)
+            return;
+        this._sweeping = true;
+        try {
+            const now = GLib.DateTime.new_now_local();
+            const dayMicros = 86400 * 1e6;
+            for (const name of listNames(this._dir).filter(isClipFileName)) {
+                // Stop promptly if disable()/closeSync() ran mid-sweep; teardown must not keep
+                // deleting. (Also bounds any overlapping sweep.)
+                if (this._closed)
+                    return;
+                const fileDay = clipDateFromName(name);
+                if (!fileDay) {
+                    log.warn(`cleanup skip unparsable name: ${name}`);
+                    continue;
+                }
+                const ageDays = Math.floor(now.difference(fileDay) / dayMicros);
+                if (ageDays <= maxAgeDays)
+                    continue;
+                try {
+                    const file = Gio.File.new_for_path(clipPath(this._dir, name));
+                    await file.delete_async(GLib.PRIORITY_DEFAULT, null);
+                    log.info(`cleanup deleted ${name} (age ${ageDays}d)`);
+                } catch (e) {
+                    log.warn(`cleanup delete failed ${name}: ${e.message}`);
+                }
+            }
+        } catch (e) {
+            log.error(`cleanup sweep failed: ${e.message}`);
+        } finally {
+            this._sweeping = false;
+        }
+    }
+
     closeSync() {
         this._closed = true;
-        if (this._flushSource) {
-            GLib.Source.remove(this._flushSource);
-            this._flushSource = 0;
-        }
         if (this._busy || this._degraded || !this._pending)
             return;
         const batch = this._pending;
@@ -427,6 +462,7 @@ export class Store {
             const { line } = this._trimRecordsForSnapshot(batch.records);
             if (!line)
                 return;
+            log.debug(`flush(final): ${batch.target}`);
             const file = Gio.File.new_for_path(clipPath(this._dir, batch.target));
             const stream = file.append_to(Gio.FileCreateFlags.NONE, null);
             stream.write_all(_enc.encode(line + '\n'), null);
