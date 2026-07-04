@@ -100,6 +100,17 @@ test("numeric value above max is clamped", () => {
   }
 });
 
+test("flush interval accepts 8 hours and clamps larger values", () => {
+  const dir = cfgDir("storage:\n  flushIntervalSec: 28801\n");
+  try {
+    const r = loadConfig(dir);
+    assert.equal(r.config.storage.flushIntervalSec, 28800);
+    assert.ok(r.warnings.some(w => /storage\.flushIntervalSec: clamped 28801 -> 28800/.test(w)));
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test("large popup dimensions are accepted up to monitor-clamped max", () => {
   const dir = cfgDir("ui:\n  popupWidth: 8000\n  popupMaxHeight: 8000\n");
   try {

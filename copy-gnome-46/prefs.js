@@ -476,7 +476,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             title: 'Persistence',
             description: 'Advanced JSONL persistence knobs; leave defaults unless debugging.',
         });
-        persistence.add(this._spinRow('flushIntervalSec', 'Flush interval (sec)', 5, 3600, 1,
+        persistence.add(this._spinRow('flushIntervalSec', 'Flush interval (sec, 5-28800)', 5, 28800, 1,
             'storage', v => v, v => Math.round(v),
             'Append the latest history snapshot once per N seconds. The only disk writer.'));
         page.add(persistence);

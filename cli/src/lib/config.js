@@ -62,7 +62,7 @@ export const LIMITS = {
   "history.cleanupIntervalSec": [15, 864000],
   "storage.textMaxBytes": [0, 15 * 1024 * 1024],
   "storage.binaryMaxBytes": [0, 10 * 1024 * 1024],
-  "storage.flushIntervalSec": [5, 3600],
+  "storage.flushIntervalSec": [5, 8 * 3600],
   "ui.popupWidth": [240, 8000],
   "ui.popupMaxHeight": [120, 8000],
   "ui.popupOffsetX": [-1000, 1000],

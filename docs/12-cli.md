@@ -178,7 +178,7 @@ copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 0  # disable row-1 write skip
 copy-gnome config set ui.popupTheme auto                      # auto | dark | light
 copy-gnome config set ui.popupOpacity 0.92                    # less transparent popup
-copy-gnome config set storage.flushIntervalSec 3600           # 1h periodic history flush
+copy-gnome config set storage.flushIntervalSec 3600           # 1h periodic history flush (range 5..28800 seconds, 5s..8h)
 copy-gnome config set storage.textMaxBytes 1048576            # 1 MiB text cap
 copy-gnome config set storage.binaryMaxBytes 1048576          # 1 MiB raw image/binary cap
 ```

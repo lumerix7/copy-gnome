@@ -74,6 +74,16 @@ test("setConfigValue rejects an out-of-range number", () => {
   assert.match(r.error, /must be between 1 and 1000/);
 });
 
+test("setConfigValue accepts flush intervals through 8 hours", () => {
+  const set = setConfigValue("storage.flushIntervalSec", "28800", pathsOpt());
+  assert.equal(set.ok, true);
+  assert.equal(set.value, 28800);
+
+  const aboveMax = setConfigValue("storage.flushIntervalSec", "28801", pathsOpt());
+  assert.equal(aboveMax.ok, false);
+  assert.match(aboveMax.error, /must be between 5 and 28800/);
+});
+
 test("setConfigValue rejects a bad enum value", () => {
   const r = setConfigValue("logging.level", "trace", pathsOpt());
   assert.equal(r.ok, false);
