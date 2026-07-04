@@ -12,6 +12,9 @@
   only at the end of runtime start (after history load) and is unexported in `disable()`.
   IPC handlers never throw into the Shell: the transport wraps every call and errors
   become `{ok:false}` JSON envelopes. Details in [docs/14-ipc](docs/14-ipc/README.md).
+- Path resolution must fail closed: prefer `/opt/home/$USER` as a durable alternate home
+  only if writable, using `.config/copy-gnome` for config and `.local/state/copy-gnome`
+  for history/state; otherwise fall back as a whole to real-home XDG config/state dirs.
 
 
 ## Tips

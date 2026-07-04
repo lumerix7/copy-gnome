@@ -28,41 +28,36 @@ GSettings also stores the handful of values the Shell/prefs need before YAML is 
 (e.g. `storage.backend`, `enabled`) - kept minimal. Everything else lives in YAML.
 
 
-## Paths: `COPY_GNOME_HOME` (answers brief #4 path part)
+## Paths: durable home + XDG config/state (answers brief #4 path part)
 
 Resolve in `core/paths.js`:
 
 ```
-COPY_GNOME_HOME (env)  ─┐  if set & writable → use it
-                        ├─▶ else default: /opt/copy-gnome/$USER   (deliberately off $HOME)
-                        │   else (unwritable) → XDG fallback: $XDG_DATA_HOME/copy-gnome
-                        ┘
+/opt/home/$USER writable?
+  yes → config: /opt/home/$USER/.config/copy-gnome/config.yaml (+ config.json)
+        state:  /opt/home/$USER/.local/state/copy-gnome/clips-YYYYMMDD.jsonl (+ tmp/)
+  no  → config: $XDG_CONFIG_HOME/copy-gnome/config.yaml (+ config.json)
+        state:  $XDG_STATE_HOME/copy-gnome/clips-YYYYMMDD.jsonl (+ tmp/)
 
-Default base: /opt/copy-gnome/$USER
-Subdirs:
-  $BASE/config/   → config.yaml (+ config.json)
-  $BASE/data/     → store: clips-YYYYMMDD.jsonl (+ tmp/, see 04)
-
-Fallback layout:
-  $XDG_DATA_HOME/copy-gnome/  → store directly: clips-YYYYMMDD.jsonl (+ tmp/)
-  $XDG_DATA_HOME/copy-gnome/config/ → config.yaml (+ config.json)
+XDG defaults:
+  $XDG_CONFIG_HOME unset → ~/.config
+  $XDG_STATE_HOME unset  → ~/.local/state
 ```
 
-**Why not `$HOME`/XDG by default** (per user): `$HOME` accumulates too much state, and
+**Why not real `$HOME`/XDG by default** (per user): `$HOME` accumulates too much state, and
 when fixing GNOME login problems the home dir often gets reset/cleaned - which would
-wipe clipboard history living under `~/.local/share`. Putting data under
-`/opt/copy-gnome/$USER` keeps it independent of `$HOME` churn. The `$USER` subdir keeps it
-per-user and isolated.
+wipe clipboard history living under `~/.local/state`. `/opt/home/$USER` is a durable
+alternate home on a retained `/opt` partition, while keeping standard per-user XDG
+subpaths (`.config` and `.local/state`) inside it.
 
-Setup & permissions: `/opt` is root-owned, so `/opt/copy-gnome` needs a one-time
-privileged creation (sticky `1777`, or owned by the user) - handled by
-`scripts/setup-home.sh` (see [10](10-packaging.md)). The extension then creates
-`/opt/copy-gnome/$USER` mode `0700` on first enable.
+Setup & permissions: `/opt/home` is expected to be writable on the retained `/opt`
+partition. `scripts/setup-home.sh` creates `/opt/home/$USER` mode `0700` as the current
+user (see [10](10-packaging.md)). The extension then creates `.config/copy-gnome` and
+`.local/state/copy-gnome` mode `0700` as needed.
 
-If `COPY_GNOME_HOME` is unset/empty, `$USER` is resolved via `GLib.get_user_name()`. If
-`/opt/copy-gnome/$USER` is not writable and no override is set, log a clear error and fall
-back to `$XDG_DATA_HOME/copy-gnome` so the desktop never breaks (data location is logged
-on startup so it's never ambiguous).
+If `/opt/home/$USER` or either app dir cannot be created, log a clear warning and fall
+back as a whole to real-home XDG config/state dirs so config and history do not split
+between roots.
 
 
 ## Config schema (defaults shown)
@@ -129,4 +124,4 @@ logging:
 ## Precedence
 
 `built-in defaults` ◀ `config.yaml`/`config.json` ◀ `GSettings` (for keybindings &
-bootstrap keys) ◀ env (`COPY_GNOME_HOME`, `COPY_GNOME_LOG`).
+bootstrap keys) ◀ env (`COPY_GNOME_LOG`).

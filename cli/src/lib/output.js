@@ -207,7 +207,7 @@ export function printStatus(status) {
   const fallback = status.paths.usedFallback ? chalk.dim(" (fallback)") : "";
   field("Home", `${status.paths.base}${fallback}`);
   field("Config", status.config.file || "defaults", { color: status.config.file ? undefined : dim });
-  field("Data dir", status.paths.data, { color: dim });
+  field("State dir", status.paths.data, { color: dim });
   field("Latest clips", status.clips.file || "none", { color: status.clips.file ? undefined : dim });
   field("Clips health", status.clips.message);
 }

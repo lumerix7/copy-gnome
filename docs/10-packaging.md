@@ -68,24 +68,23 @@ This standard install path is still not a hot-reload path: in current GNOME Shel
 sessions it may install files to disk while `gnome-extensions info/enable` still cannot
 see the UUID until the next login.
 
-## First-run data dir (the `/opt/copy-gnome/$USER` default - see [05](05-config.md))
+## First-run durable home (`/opt/home/$USER` - see [05](05-config.md))
 
-Because the default data base is **`/opt/copy-gnome/$USER`** (deliberately off `$HOME`),
-`/opt/copy-gnome` must exist and be user-writable. The install script does the one-time
-privileged setup:
+Because the default config/state root is **`/opt/home/$USER`** (deliberately off real
+`$HOME`), that directory must exist and be user-writable. The setup script does the
+one-time setup:
 
 ```sh
-# scripts/setup-home.sh  (run once, needs sudo)
-sudo install -d -m 1777 /opt/copy-gnome          # sticky like /tmp: each user owns their subdir
-# extension creates /opt/copy-gnome/$USER itself on first enable (0700)
+# scripts/setup-home.sh  (run once)
+install -d -m 0755 /opt/home
+install -d -m 0700 "/opt/home/$USER"
+# extension creates .config/copy-gnome and .local/state/copy-gnome itself
 ```
 
-- `1777` (sticky) lets every user create their own `$USER` subdir while not touching
-  others'. The extension creates `/opt/copy-gnome/$USER` mode `0700` on first run.
-- Alternative (single-user box): `sudo install -d -m 0755 -o $USER -g $USER /opt/copy-gnome`.
-- Override anytime with `COPY_GNOME_HOME=/somewhere/writable`.
-- If `/opt/copy-gnome` is missing/unwritable and no override, the extension logs a clear
-  error and falls back to `$XDG_DATA_HOME/copy-gnome` so the desktop never breaks.
+- `/opt/home` must be writable by the installing user or pre-created by the system owner.
+- `/opt/home/$USER` is private per-user state and should be mode `0700`.
+- If `/opt/home/$USER` is missing/unwritable, the extension logs a clear warning and falls
+  back as a whole to `$XDG_CONFIG_HOME/copy-gnome` and `$XDG_STATE_HOME/copy-gnome`.
 
 ## Reload on Wayland (important)
 
@@ -107,6 +106,6 @@ sudo install -d -m 1777 /opt/copy-gnome          # sticky like /tmp: each user o
 |--------|---------|
 | `build.sh` | src → copy-gnome-46/50, stamp, compile schemas, pack |
 | `install-extension.sh` | detect or select version, pack with `gnome-extensions`, install bundle; relogin before enable on Wayland |
-| `setup-home.sh` | one-time `sudo` creation of `/opt/copy-gnome` |
+| `setup-home.sh` | one-time creation of `/opt/home/$USER` |
 | `dev-nested.sh` | launch nested Wayland Shell for testing |
 | `uninstall.sh` | disable + remove install dir (leaves data unless `--purge`) |

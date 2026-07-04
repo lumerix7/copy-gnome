@@ -4,18 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveDataPaths, xdgDataHome } from "../src/lib/paths.js";
+import { resolveDataPaths, xdgConfigHome, xdgStateHome } from "../src/lib/paths.js";
 
-let prevHome;
-let prevXdg;
+let prevConfig;
+let prevState;
 
 beforeEach(() => {
-  prevHome = process.env.COPY_GNOME_HOME;
-  prevXdg = process.env.XDG_DATA_HOME;
+  prevConfig = process.env.XDG_CONFIG_HOME;
+  prevState = process.env.XDG_STATE_HOME;
 });
 
 afterEach(() => {
-  for (const [key, val] of [["COPY_GNOME_HOME", prevHome], ["XDG_DATA_HOME", prevXdg]]) {
+  for (const [key, val] of [["XDG_CONFIG_HOME", prevConfig], ["XDG_STATE_HOME", prevState]]) {
     if (val === undefined)
       delete process.env[key];
     else
@@ -23,43 +23,67 @@ afterEach(() => {
   }
 });
 
-test("explicit writable COPY_GNOME_HOME is used as base, data lives under base/data", () => {
+test("writable durable home is used for config and state XDG dirs", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "cg-paths-"));
   try {
-    process.env.COPY_GNOME_HOME = home;
-    const p = resolveDataPaths();
+    const p = resolveDataPaths({ preferredHome: home });
     assert.equal(p.usedFallback, false);
     assert.equal(p.base, home);
-    assert.equal(p.explicit, home);
-    assert.equal(p.config, path.join(home, "config"));
-    assert.equal(p.data, path.join(home, "data"));
+    assert.equal(p.preferred, home);
+    assert.equal(p.config, path.join(home, ".config", "copy-gnome"));
+    assert.equal(p.data, path.join(home, ".local", "state", "copy-gnome"));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
-test("falls back to XDG_DATA_HOME/copy-gnome when the preferred home is unusable", () => {
-  const xdg = fs.mkdtempSync(path.join(os.tmpdir(), "cg-xdg-"));
+test("falls back to real-home XDG config/state dirs when durable home is unusable", () => {
+  const realHome = fs.mkdtempSync(path.join(os.tmpdir(), "cg-real-home-"));
   try {
-    // two missing levels: the parent does not exist, so canUseDataHome is false
-    process.env.COPY_GNOME_HOME = path.join(os.tmpdir(), `cg-missing-${process.pid}-${Date.now()}`, "child");
-    process.env.XDG_DATA_HOME = xdg;
-    const p = resolveDataPaths();
+    const missing = path.join(os.tmpdir(), `cg-missing-${process.pid}-${Date.now()}`, "child");
+    const p = resolveDataPaths({ preferredHome: missing, fallbackHome: realHome });
     assert.equal(p.usedFallback, true);
-    assert.equal(p.base, path.join(xdg, "copy-gnome"));
-    assert.equal(p.config, path.join(p.base, "config"));
-    assert.equal(p.data, p.base); // fallback asymmetry: data dir IS the base, not base/data
+    assert.equal(p.base, realHome);
+    assert.equal(p.config, path.join(realHome, ".config", "copy-gnome"));
+    assert.equal(p.data, path.join(realHome, ".local", "state", "copy-gnome"));
   } finally {
-    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
   }
 });
 
-test("xdgDataHome respects XDG_DATA_HOME", () => {
-  process.env.XDG_DATA_HOME = "/some/xdg";
-  assert.equal(xdgDataHome(), "/some/xdg");
+test("falls back when a preferred app dir cannot be created", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cg-paths-"));
+  const realHome = fs.mkdtempSync(path.join(os.tmpdir(), "cg-real-home-"));
+  try {
+    fs.writeFileSync(path.join(home, ".config"), "not a dir", "utf8");
+    const p = resolveDataPaths({ preferredHome: home, fallbackHome: realHome });
+    assert.equal(p.usedFallback, true);
+    assert.equal(p.base, realHome);
+    assert.equal(p.config, path.join(realHome, ".config", "copy-gnome"));
+    assert.equal(p.data, path.join(realHome, ".local", "state", "copy-gnome"));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
+  }
 });
 
-test("xdgDataHome defaults to ~/.local/share when unset", () => {
-  delete process.env.XDG_DATA_HOME;
-  assert.equal(xdgDataHome(), path.join(os.homedir(), ".local", "share"));
+test("fallback respects XDG_CONFIG_HOME and XDG_STATE_HOME", () => {
+  const realHome = fs.mkdtempSync(path.join(os.tmpdir(), "cg-real-home-"));
+  try {
+    process.env.XDG_CONFIG_HOME = "/some/config";
+    process.env.XDG_STATE_HOME = "/some/state";
+    const missing = path.join(os.tmpdir(), `cg-missing-${process.pid}-${Date.now()}`, "child");
+    const p = resolveDataPaths({ preferredHome: missing, fallbackHome: realHome });
+    assert.equal(p.config, path.join("/some/config", "copy-gnome"));
+    assert.equal(p.data, path.join("/some/state", "copy-gnome"));
+  } finally {
+    fs.rmSync(realHome, { recursive: true, force: true });
+  }
+});
+
+test("XDG helpers default under the given home", () => {
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_STATE_HOME;
+  assert.equal(xdgConfigHome("/home/u"), path.join("/home/u", ".config"));
+  assert.equal(xdgStateHome("/home/u"), path.join("/home/u", ".local", "state"));
 });

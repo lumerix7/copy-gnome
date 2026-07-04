@@ -9,8 +9,12 @@ const thisFile = fileURLToPath(import.meta.url);
 export const cliRoot = path.resolve(path.dirname(thisFile), "../..");
 export const repoRoot = path.resolve(cliRoot, "..");
 
-export function xdgDataHome() {
-  return process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+export function xdgConfigHome(home = os.homedir()) {
+  return process.env.XDG_CONFIG_HOME || path.join(home, ".config");
+}
+
+export function xdgStateHome(home = os.homedir()) {
+  return process.env.XDG_STATE_HOME || path.join(home, ".local", "state");
 }
 
 export function installedExtensionDir() {
@@ -28,23 +32,31 @@ export function schemaDir() {
   return path.join(sourceExtensionDir(), "schemas");
 }
 
-export function resolveDataPaths() {
-  const explicit = process.env.COPY_GNOME_HOME || "";
+export function resolveDataPaths(opts = {}) {
   const user = os.userInfo().username;
-  const preferred = explicit || path.join("/opt", "copy-gnome", user);
-  const fallback = path.join(xdgDataHome(), "copy-gnome");
-  const canUsePreferred = canUseDataHome(preferred);
+  const preferred = opts.preferredHome || path.join("/opt", "home", user);
+  const fallback = opts.fallbackHome || os.homedir();
+  const preferredConfig = path.join(preferred, ".config", "copy-gnome");
+  const preferredData = path.join(preferred, ".local", "state", "copy-gnome");
+  const canUsePreferred = canUseHome(preferred) &&
+    canUseDirOrParent(preferredConfig) &&
+    canUseDirOrParent(preferredData);
   const base = canUsePreferred ? preferred : fallback;
   const usedFallback = !canUsePreferred;
+  const config = canUsePreferred
+    ? preferredConfig
+    : path.join(opts.xdgConfigHome || xdgConfigHome(fallback), "copy-gnome");
+  const data = canUsePreferred
+    ? preferredData
+    : path.join(opts.xdgStateHome || xdgStateHome(fallback), "copy-gnome");
 
   return {
-    explicit: explicit || null,
     preferred,
     fallback,
     base,
     usedFallback,
-    config: path.join(base, "config"),
-    data: usedFallback ? base : path.join(base, "data"),
+    config,
+    data,
   };
 }
 
@@ -82,9 +94,26 @@ export function canWriteDir(p) {
   }
 }
 
-function canUseDataHome(base) {
+function canUseHome(base) {
   if (existsDir(base))
     return canWriteDir(base);
   const parent = path.dirname(base);
   return existsDir(parent) && canWriteDir(parent);
+}
+
+function canUseDirOrParent(dir) {
+  if (existsDir(dir))
+    return canWriteDir(dir);
+  let cur = dir;
+  while (cur && cur !== path.dirname(cur)) {
+    try {
+      const stat = fs.statSync(cur);
+      return stat.isDirectory() && canWriteDir(cur);
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        return false;
+    }
+    cur = path.dirname(cur);
+  }
+  return false;
 }

@@ -1,6 +1,7 @@
 # copy-gnome example config.
-# Copy to:  $COPY_GNOME_HOME/config/config.yaml
-#   (default $COPY_GNOME_HOME = /opt/copy-gnome/$USER)
+# Copy to: /opt/home/$USER/.config/copy-gnome/config.yaml
+# Fallback path when /opt/home/$USER is unavailable:
+#   ~/.config/copy-gnome/config.yaml
 # Everything is optional; omitted keys fall back to the built-in defaults.
 # config.json is also accepted (same keys) if you prefer JSON.
 

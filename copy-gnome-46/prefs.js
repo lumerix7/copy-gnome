@@ -576,9 +576,9 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         group.add(this._infoRow('UUID', md.uuid ?? '?'));
         group.add(this._infoRow('GNOME Shell', shellVer));
         // NOTE: paths are resolved by THIS prefs process. If its environment (e.g.
-        // COPY_GNOME_HOME) differs from the gnome-shell session, these can diverge from what
+        // If this process resolves paths differently from the gnome-shell session, these can diverge from what
         // the extension actually uses.
-        group.add(this._infoRow('Data dir', this._paths.data));
+        group.add(this._infoRow('State dir', this._paths.data));
         group.add(this._infoRow('Config dir', this._paths.config));
 
         const status = configStatus(this._paths.config);

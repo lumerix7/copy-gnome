@@ -8,14 +8,14 @@ import { CONFIG_KEYS, DEFAULTS, ENUMS, LIMITS, loadConfig } from "./config.js";
 import { existsFile, resolveDataPaths } from "./paths.js";
 import { shellQuote } from "./shell.js";
 
-export function configContext() {
-  const paths = resolveDataPaths();
+export function configContext(opts = {}) {
+  const paths = opts.paths || resolveDataPaths(opts.pathsOptions);
   const loaded = loadConfig(paths.config);
   return { paths, loaded };
 }
 
-export function configPathInfo() {
-  const { paths, loaded } = configContext();
+export function configPathInfo(opts = {}) {
+  const { paths, loaded } = configContext(opts);
   return {
     configDir: paths.config,
     activeFile: loaded.file,
@@ -26,8 +26,8 @@ export function configPathInfo() {
   };
 }
 
-export function validateConfig() {
-  const { loaded } = configContext();
+export function validateConfig(opts = {}) {
+  const { loaded } = configContext(opts);
   return {
     ok: loaded.errors.length === 0,
     file: loaded.file,
@@ -39,7 +39,7 @@ export function validateConfig() {
 }
 
 export function showConfig(opts = {}) {
-  const { loaded } = configContext();
+  const { loaded } = configContext(opts);
   return opts.withMeta ? {
     file: loaded.file,
     format: loaded.format,
@@ -50,10 +50,10 @@ export function showConfig(opts = {}) {
   } : loaded.config;
 }
 
-export function getConfigValue(key) {
+export function getConfigValue(key, opts = {}) {
   if (!CONFIG_KEYS.includes(key))
     return { ok: false, error: `unknown or unsupported config key: ${key}`, keys: CONFIG_KEYS };
-  const { loaded } = configContext();
+  const { loaded } = configContext(opts);
   const value = getPath(loaded.config, key);
   return {
     ok: true,
@@ -65,14 +65,14 @@ export function getConfigValue(key) {
   };
 }
 
-export function setConfigValue(key, rawValue) {
+export function setConfigValue(key, rawValue, opts = {}) {
   if (!CONFIG_KEYS.includes(key))
     return { ok: false, error: `unknown or unsupported config key: ${key}`, keys: CONFIG_KEYS };
   const parsed = parseConfigValue(key, rawValue);
   if (!parsed.ok)
     return parsed;
 
-  const { paths, loaded } = configContext();
+  const { paths, loaded } = configContext(opts);
   if (loaded.errors.length) {
     return {
       ok: false,
@@ -102,7 +102,7 @@ export function setConfigValue(key, rawValue) {
 }
 
 export function editConfig(opts = {}) {
-  const { paths, loaded } = configContext();
+  const { paths, loaded } = configContext(opts);
   fs.mkdirSync(paths.config, { recursive: true, mode: 0o700 });
 
   const yamlPath = path.join(paths.config, "config.yaml");

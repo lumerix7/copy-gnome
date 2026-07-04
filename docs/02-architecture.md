@@ -18,7 +18,7 @@ src/
       json-store.js   # daily append-only full-history snapshot JSONL
       gda-store.js    # optional backend: SQLite via libgda (only if typelib present)
     config.js         # load/merge/validate YAML|JSON config
-    paths.js          # resolve COPY_GNOME_HOME / XDG dirs
+    paths.js          # resolve /opt/home/$USER or fallback XDG config/state dirs
     utf8.js           # UTF-8 byteLength / encodeUtf8 helpers
     paste.js          # Clutter virtual-device paste injection
     log.js            # leveled logging
@@ -63,7 +63,7 @@ src/
 ## Lifecycle
 
 `enable()`:
-1. `paths.resolve()` → ensure `COPY_GNOME_HOME` subdirs exist (async).
+1. `paths.resolve()` → ensure config/state dirs exist (async).
 2. `config.load()` → merged config object.
 3. `store.open()` → load index into `history.js`.
 4. `monitor.start()` → connect `MetaSelection::owner-changed`.

@@ -47,9 +47,9 @@ async function runCli(args, opts = {}) {
       session: "wayland",
       extension: { uuid: "copy-gnome@clipboard", installed: true, dir: "/ext", info: { state: "ACTIVE" }, infoOk: true },
       gsettings: { togglePopup: "['<Super>v']" },
-      paths: { usedFallback: false, base: "/opt/copy-gnome/u", data: "/opt/copy-gnome/u/data" },
-      config: { file: "/opt/copy-gnome/u/config/config.yaml" },
-      clips: { file: "/opt/copy-gnome/u/data/clips.jsonl", message: "ok" },
+      paths: { usedFallback: false, base: "/opt/home/u", data: "/opt/home/u/.local/state/copy-gnome" },
+      config: { file: "/opt/home/u/.config/copy-gnome/config.yaml" },
+      clips: { file: "/opt/home/u/.local/state/copy-gnome/clips.jsonl", message: "ok" },
     })),
   });
   program.exitOverride();

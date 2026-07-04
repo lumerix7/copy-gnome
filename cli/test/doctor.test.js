@@ -39,8 +39,15 @@ function makeFixture(overrides = {}) {
       infoError: null,
     },
     gsettings: { schema: "org.gnome.shell.extensions.copy-gnome", schemaDir: ext, togglePopup: "['<Super>v']", ok: true, error: null },
-    paths: { explicit: null, preferred: data, fallback: data, base: data, usedFallback: false, config: path.join(data, "config"), data },
-    config: { file: path.join(data, "config", "config.yaml"), format: "yaml", exists: true, config: baseConfig, warnings: [], errors: [] },
+    paths: {
+      preferred: data,
+      fallback: data,
+      base: data,
+      usedFallback: false,
+      config: path.join(data, ".config", "copy-gnome"),
+      data: path.join(data, ".local", "state", "copy-gnome"),
+    },
+    config: { file: path.join(data, ".config", "copy-gnome", "config.yaml"), format: "yaml", exists: true, config: baseConfig, warnings: [], errors: [] },
     clips: { file: path.join(data, "clips.jsonl"), ok: true, exists: true, message: "latest snapshot ok (1 items)" },
     ...overrides,
   };

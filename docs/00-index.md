@@ -30,7 +30,7 @@ DBus-service + GTK app.
 | 02 | [architecture](02-architecture.md)       | Module layout, data flow, lifecycle                                |
 | 03 | [clipboard](03-clipboard/README.md)      | Monitoring, mime handling, write-back, paste, persistence, privacy |
 | 04 | [storage](04-storage/README.md)          | Append-only clips JSONL, persistence strategy, SQLite alternative  |
-| 05 | [config](05-config.md)                   | YAML/JSON config, GSettings, `COPY_GNOME_HOME` paths               |
+| 05 | [config](05-config.md)                   | YAML/JSON config, GSettings, durable-home/XDG paths                |
 | 06 | [history-model](06-history-model.md)     | MRU ordering, eviction                                             |
 | 07 | [ui](07-ui.md)                           | Caret/window popup, panel indicator, search, prefs window          |
 | 08 | [keybindings](08-keybindings.md)         | Global shortcuts, GSettings constraint                             |
@@ -53,10 +53,9 @@ DBus-service + GTK app.
 | 4. SQLite vs JSONL      | **Daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot lines** in pure GJS - zero native deps.                                                                      | [04](04-storage/README.md)                              |
 | 5. Keybindings + popup  | Global keybinding opens a centered `St` popup over the focused window's monitor, with modal keyboard grab.                                                                    | [07](07-ui.md), [08](08-keybindings.md)                 |
 | 6. Monitor + write-back | `MetaSelection::owner-changed` → capture; selecting an entry sets the clipboard and optionally auto-pastes.                                                                   | [03](03-clipboard/README.md)                            |
-| 7. Other                | Privacy/password skipping, caps, export/import, migration - see below.                                                                                                        | [03](03-clipboard/README.md), [06](06-history-model.md) |
+| 7. Other                | Privacy/password skipping, caps, export/import - see below.                                                                                                                   | [03](03-clipboard/README.md), [06](06-history-model.md) |
 
-> Path note: data home defaults to **`/opt/copy-gnome/$USER`**, deliberately **off
-> `$HOME`** (home gets cluttered and is often reset when fixing GNOME login problems, which
-> would wipe history under `~/.local/share`). `/opt/copy-gnome` needs a one-time privileged
-> setup; `COPY_GNOME_HOME` overrides; XDG is the last-resort fallback. See [05](05-config.md)
-> and [10](10-packaging.md).
+> Path note: config/state prefer **`/opt/home/$USER/.config/copy-gnome`** and
+> **`/opt/home/$USER/.local/state/copy-gnome`**, deliberately off real `$HOME`.
+> If `/opt/home/$USER` is unavailable, both paths fall back together to real-home XDG
+> config/state dirs. See [05](05-config.md) and [10](10-packaging.md).

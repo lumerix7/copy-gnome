@@ -54,15 +54,15 @@ export function runDoctor(opts = {}, sources = {}) {
         ? `toggle-popup keybinding is empty; popup cannot be opened (${status.gsettings.togglePopup})`
         : `toggle-popup: ${status.gsettings.togglePopup}`);
 
-  add(checks, "paths.data-home", status.paths.usedFallback ? "warn" : "ok",
+  add(checks, "paths.home", status.paths.usedFallback ? "warn" : "ok",
     status.paths.usedFallback
-      ? `Using fallback data home: ${status.paths.base}; preferred ${status.paths.preferred} is not writable`
-      : `Data home: ${status.paths.base}`);
+      ? `Using fallback home: ${status.paths.base}; preferred ${status.paths.preferred} is not writable`
+      : `Home root: ${status.paths.base}`);
 
   if (fs.existsSync(status.paths.data))
-    add(checks, "paths.data-dir", canWriteDir(status.paths.data) ? "ok" : "fail", `Data dir: ${status.paths.data}`);
+    add(checks, "paths.state-dir", canWriteDir(status.paths.data) ? "ok" : "fail", `State dir: ${status.paths.data}`);
   else
-    add(checks, "paths.data-dir", "warn", `Data dir does not exist yet: ${status.paths.data}`);
+    add(checks, "paths.state-dir", "warn", `State dir does not exist yet: ${status.paths.data}`);
 
   if (status.config.errors.length > 0) {
     for (const error of status.config.errors)

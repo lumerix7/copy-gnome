@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# One-time privileged setup of the data home base (/opt/copy-gnome).
-# The extension creates /opt/copy-gnome/$USER (0700) itself on first run.
-# Override the whole location any time with COPY_GNOME_HOME=/some/writable/path.
+# One-time setup of the durable home base (/opt/home/$USER).
+# The extension creates .config/copy-gnome and .local/state/copy-gnome itself.
 set -euo pipefail
 
-BASE="${1:-/opt/copy-gnome}"
+BASE="${1:-/opt/home}"
+USER_HOME="$BASE/$USER"
 
-echo "creating $BASE (sticky 1777, like /tmp: each user owns their own subdir)"
-sudo install -d -m 1777 "$BASE"
-echo "done. Data will live in $BASE/$USER"
+echo "creating $USER_HOME (private durable home)"
+install -d -m 0755 "$BASE"
+install -d -m 0700 "$USER_HOME"
+echo "done. Config will live in $USER_HOME/.config/copy-gnome"
+echo "done. State will live in $USER_HOME/.local/state/copy-gnome"

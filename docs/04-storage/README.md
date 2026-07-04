@@ -10,21 +10,20 @@ extension keeps history in memory; disk is a periodically-written durable mirror
 | [snapshot-line](snapshot-line.md)           | JSONL snapshot schema, item fields, null/omission rules          |
 | [payloads](payloads.md)                     | Text, files, images/binary, and rich text storage decisions      |
 | [lifecycle](lifecycle.md)                   | Startup, write path, day switching, durability, writer ownership |
-| [cleanup-and-limits](cleanup-and-limits.md) | Retention sweep, caps, prohibited runtime work, old layouts      |
+| [cleanup-and-limits](cleanup-and-limits.md) | Retention sweep, caps, prohibited runtime work                  |
 
 
 ## Layout
 
 ```
-$COPY_GNOME_HOME/data/
+/opt/home/$USER/.local/state/copy-gnome/
   clips-20260628.jsonl
   clips-20260629.jsonl
   tmp/
 ```
 
-If the `/opt/copy-gnome/$USER` default is not writable and no explicit
-`COPY_GNOME_HOME` is set, the fallback data directory is
-`$XDG_DATA_HOME/copy-gnome/` directly.
+If `/opt/home/$USER` is not writable, the fallback state directory is
+`$XDG_STATE_HOME/copy-gnome/` (`~/.local/state/copy-gnome/` when unset).
 
 Use daily files by default. That keeps individual append-only files bounded without suffix
 rollover logic.

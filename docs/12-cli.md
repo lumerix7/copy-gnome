@@ -223,8 +223,9 @@ Extension
   Installed version: 0.1.0
 
 Config
-  Data home: /opt/copy-gnome/<USER>
+  Home root: /opt/home/<USER>
   Config file: not found, using defaults
+  State dir: /opt/home/<USER>/.local/state/copy-gnome
   captureImages: true
   captureFiles: true
 
@@ -251,8 +252,8 @@ Offline checks, always available:
 - Warn when the `toggle-popup` keybinding is empty (`@as []`), since the popup
   cannot be opened without one (implemented as part of `gsettings.toggle-popup`).
 - Run `gnome-extensions info copy-gnome@clipboard` and parse enabled/state/path/version.
-- Verify `COPY_GNOME_HOME` if set; otherwise check whether `/opt/copy-gnome` exists and is
-  usable, and report the expected fallback to `$XDG_DATA_HOME/copy-gnome` if not.
+- Verify whether `/opt/home/$USER` is usable, and report the expected fallback to
+  `$XDG_CONFIG_HOME/copy-gnome` and `$XDG_STATE_HOME/copy-gnome` if not.
 - Parse `config.yaml` / `config.json` enough to flag dangerous settings:
   `general.captureImages: true`, `general.captureFiles: true`, huge `maxItemBytes`,
   `logging.level: debug` left on, or invalid YAML/JSON.

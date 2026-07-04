@@ -2,10 +2,11 @@
 
 ## Decided (per user)
 
-- **Data home**: default `COPY_GNOME_HOME=/opt/copy-gnome/$USER`, deliberately **off
-  `$HOME`** (home gets cluttered and is wiped/reset when fixing login problems). XDG used
-  only as a last-resort fallback if `/opt/copy-gnome` is unwritable. See [05](05-config.md),
-  [10](10-packaging.md).
+- **Durable home paths**: config/state prefer `/opt/home/$USER/.config/copy-gnome` and
+  `/opt/home/$USER/.local/state/copy-gnome`, deliberately **off real `$HOME`**. If
+  `/opt/home/$USER` is unavailable, both fall back together to real-home XDG config/state
+  dirs.
+  See [05](05-config.md), [10](10-packaging.md).
 - **Config**: YAML first, JSON accepted; keybindings in GSettings.
 - **Storage target**: daily append-only `clips-YYYYMMDD.jsonl` full-history snapshot
   lines with bounded inline text, optional capped base64, and file URI references.
@@ -30,7 +31,7 @@
 
 | #   | Risk                                                                 | Mitigation                                                                                    |
 |-----|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
-| R1  | `/opt/copy-gnome` needs privileged one-time setup; users may skip it | `setup-home.sh` + clear fallback to XDG with a logged warning                                 |
+| R1  | `/opt/home/$USER` needs one-time setup; users may skip it | `setup-home.sh` + clear fallback to XDG with a logged warning                                 |
 | R2  | Blocking IO in `gnome-shell` freezes the desktop                     | All IO async via Gio; `disable()` only attempts a tiny best-effort flush and skips risky work |
 | R3  | Vendored YAML parser bugs on exotic YAML                             | Keep config schema simple/flat; validate + fall back to defaults; JSON always available       |
 | R4  | Write-back re-captured as a new entry (loop)                         | Monitor `_lastContent(origin=restore)` guard around our own `set_content`                     |
@@ -46,8 +47,8 @@
 ## Closed user decisions
 
 1. Keep `metadata.json` `uuid` as `copy-gnome@clipboard`.
-2. Keep the default data home under `/opt/copy-gnome/$USER`; setup uses a shared
-   `/opt/copy-gnome` parent and a private per-user `0700` subdir.
+2. Keep default config/state under `/opt/home/$USER` using XDG-style `.config` and
+   `.local/state` subdirs; fallback to real-home XDG paths.
 3. Keep auto-paste enabled by default for the current test build.
 4. Commit and install from the two versioned extension trees directly.
 5. Ship the prefs GUI now; export/import can remain post-MVP.

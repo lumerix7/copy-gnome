@@ -35,7 +35,7 @@ standalone clipboard managers can't monitor the clipboard).
 ## Install (local, GNOME 46/50, Wayland)
 
 ```sh
-# (optional) one-time data-home setup if you keep the default /opt/copy-gnome
+# (optional) one-time durable-home setup if you keep the /opt/home default
 ./scripts/setup-home.sh
 
 ./scripts/install-extension.sh
@@ -44,8 +44,9 @@ standalone clipboard managers can't monitor the clipboard).
 gnome-extensions enable copy-gnome@clipboard
 ```
 
-Then copy `config.example.yaml` to `$COPY_GNOME_HOME/config/config.yaml` if you want to
-tweak defaults (default `$COPY_GNOME_HOME` = `/opt/copy-gnome/$USER`).
+Then copy `config.example.yaml` to `/opt/home/$USER/.config/copy-gnome/config.yaml`
+if you want to tweak defaults. If `/opt/home/$USER` is unavailable, copy it to
+`~/.config/copy-gnome/config.yaml` instead.
 
 
 ## CLI / recovery tool
@@ -113,5 +114,5 @@ journalctl --user -f | grep -i copy-gnome    # logs
 ## Uninstall
 
 ```sh
-./scripts/uninstall.sh            # add --purge to also delete the data home
+./scripts/uninstall.sh            # add --purge to also delete copy-gnome config/state
 ```
