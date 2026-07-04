@@ -4,18 +4,25 @@
 
 There is no blob GC because there are no blobs.
 
-Expired-file retention runs on the normal Shell path as a bounded, fail-closed periodic
-sweep (see `store.sweepOldFiles`, wired in `extension.js`):
+Expired-file retention runs on the normal Shell path as a bounded, fail-closed sweep
+(see `store.sweepOldFiles`, wired in `extension.js`):
 
 - `history.maxAgeDays` (default 3, 0 = disabled): delete whole daily `clips-*.jsonl` files
   whose filename date is strictly older than N days.
-- `history.cleanupIntervalSec` (default 86400, range 15..864000): sweep interval.
-- The sweep starts only after `store.open()` + history load; it never runs from
-  `disable()`/teardown. Memory is the session source of truth, so deleting even the
-  just-loaded old file is safe; the next copy re-homes the full snapshot to today's file.
+- `history.cleanupIntervalSec` (default 86400, range 15..864000): periodic sweep interval.
+- The sweep starts only after `store.open()` + history load. It runs once at startup,
+  periodically, and after the first successful append to a newly-created daily clips file;
+  it never runs from `disable()`/teardown. Memory is the session source of truth, so
+  deleting even the just-loaded old file is safe; the next copy re-homes the full snapshot
+  to today's file.
+- If that new-file trigger races an in-progress sweep, the store schedules one follow-up
+  sweep. Startup and periodic overlap remain no-ops, so a slow sweep cannot be kept alive by
+  the periodic timer.
 - It deletes whole files by filename date only. It never parses, rewrites, truncates,
   compacts, or renames file contents, and never touches the in-memory history model.
-- Each delete logs `info`; per-file failures log `warn`; a sweep-level throw logs `error`.
+- A newly-created daily file logs `info`; its retention outcome logs `info` as either a
+  cleanup request or a disabled-retention skip. Each delete logs `info`; per-file failures
+  log `warn`; a sweep-level throw logs `error`.
 
 Out of scope for the runtime sweep:
 

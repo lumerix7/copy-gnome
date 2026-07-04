@@ -198,15 +198,17 @@ function normalizeSnapshot(obj, maxLineBytes) {
 }
 
 export class Store {
-    constructor({ dataDir, onTrim }) {
+    constructor({ dataDir, onTrim, onNewDailyFile }) {
         this._dir = dataDir;
         this._onTrim = onTrim ?? (() => {});
+        this._onNewDailyFile = onNewDailyFile ?? (() => {});
         this._tmpDir = GLib.build_filenamev([dataDir, 'tmp']);
         this._pending = null;
         this._busy = false;
         this._closed = false;
         this._degraded = false;
         this._sweeping = false;
+        this._retryNewDailySweep = false;
     }
 
     async open() {
@@ -347,7 +349,7 @@ export class Store {
         // supersedes any unsaved snapshot, so we never queue stale or duplicate work. `gen` is
         // History's change counter at snapshot time, used to detect concurrent edits in flush().
         // No per-mutation flush: writes happen only on the periodic timer in extension.js
-        // (storage.flushIntervalSec, default 1800s) and on disable()/closeSync(). _pending just
+        // (storage.flushIntervalSec, default 3600s) and on disable()/closeSync(). _pending just
         // holds the latest full snapshot until then; recent captures may be lost on crash.
         this._pending = { target: currentClipName(), records, gen };
     }
@@ -443,10 +445,19 @@ export class Store {
             if (!line)
                 return 'failed';
             const path = clipPath(this._dir, batch.target);
+            const isNewDailyFile = !Gio.File.new_for_path(path).query_exists(null);
             log.debug(`[store]: flush ${records.length} records -> ${path}${trimmed ? ' (trimmed)' : ''}`);
             await this._appendTextAsync(path, line + '\n');
             if (trimmed)
                 this._onTrim(records, batch.gen);
+            if (isNewDailyFile) {
+                log.info(`[store]: new daily file created ${path}`);
+                try {
+                    this._onNewDailyFile(batch.target, path);
+                } catch (e) {
+                    log.warn(`[store]: new daily file hook failed path=${path} reason=${e.message}`);
+                }
+            }
             this._degraded = false;
             return 'saved';
         } catch (e) {
@@ -479,9 +490,16 @@ export class Store {
     // older than `maxAgeDays` days. Bounded and fail-closed: never throws into the timer
     // callback, never touches the in-memory history (Store holds no reference to it). Runs only
     // after history load and never from disable()/teardown (see extension.js / WARNING.md).
-    async sweepOldFiles(maxAgeDays) {
-        if (!(maxAgeDays > 0) || this._closed || this._sweeping)
+    async sweepOldFiles(maxAgeDays, { retryIfBusy = false } = {}) {
+        if (!(maxAgeDays > 0) || this._closed)
             return;
+        if (this._sweeping) {
+            // Timer/startup overlap remains a no-op, but a successful first append to a new
+            // daily file must not lose its one cleanup trigger while a sweep is in flight.
+            if (retryIfBusy)
+                this._retryNewDailySweep = true;
+            return;
+        }
         this._sweeping = true;
         try {
             const now = GLib.DateTime.new_now_local();
@@ -512,6 +530,10 @@ export class Store {
             log.error(`[store]: cleanup sweep failed: ${e.message}`);
         } finally {
             this._sweeping = false;
+            if (this._retryNewDailySweep && !this._closed) {
+                this._retryNewDailySweep = false;
+                void this.sweepOldFiles(maxAgeDays);
+            }
         }
     }
 

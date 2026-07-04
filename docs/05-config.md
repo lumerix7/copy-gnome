@@ -78,7 +78,7 @@ storage:
   backend: jsonl                    # jsonl | gda
   textMaxBytes: 1048576             # 1 MiB default; max 15 MiB, also bounded by maxItemBytes
   binaryMaxBytes: 1048576           # 1 MiB default; max 10 MiB raw, also bounded by maxItemBytes
-  flushIntervalSec: 1800            # append latest snapshot once per N seconds (the only writer)
+  flushIntervalSec: 3600            # append latest snapshot once per N seconds (the only writer)
 
 privacy:
   # Optional skip list. Leave empty if password/token copies should remain in history.

@@ -22,7 +22,7 @@ export const DEFAULTS = {
         backend: 'jsonl',
         textMaxBytes: 1024 * 1024,  // 1 MiB
         binaryMaxBytes: 1024 * 1024, // 1 MiB
-        flushIntervalSec: 1800,      // append latest snapshot once per N sec (the only disk writer)
+        flushIntervalSec: 3600,      // append latest snapshot once per N sec (the only disk writer)
     },
     privacy: {
         secretMimes: [],

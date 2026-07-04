@@ -19,7 +19,7 @@ export const DEFAULTS = {
     backend: "jsonl",
     textMaxBytes: 1024 * 1024,
     binaryMaxBytes: 1024 * 1024,
-    flushIntervalSec: 1800,
+    flushIntervalSec: 3600,
   },
   privacy: {
     secretMimes: [],

@@ -155,6 +155,7 @@ export default class CopyGnomeExtension extends Extension {
                 if (this._history && this._history.gen === gen)
                     this._history.trimTo(records);
             },
+            onNewDailyFile: name => this._sweepOldFiles(`new daily file ${name}`, { retryIfBusy: true }),
         });
         this._history = new History({
             opts: this._config.history,
@@ -227,23 +228,18 @@ export default class CopyGnomeExtension extends Extension {
             return GLib.SOURCE_CONTINUE;
         });
 
-        // Periodic retention sweep: delete daily clips-*.jsonl files older than maxAgeDays.
-        // Started only here, after store.open() + history.load() have populated the in-memory
-        // model, and never from disable()/teardown. The sweep is fail-closed and never touches
-        // the in-memory history; deleting even the just-loaded old file is safe because memory
-        // is the session source of truth and the next copy re-homes the snapshot to today's file.
+        // Retention sweep: delete daily clips-*.jsonl files older than maxAgeDays. It starts
+        // only here, after store.open() + history.load() have populated the in-memory model,
+        // runs periodically, and also runs after a successful first append to a new daily file.
+        // It never runs from disable()/teardown. The sweep is fail-closed and never touches the
+        // in-memory history; deleting even the just-loaded old file is safe because memory is
+        // the session source of truth and the next copy re-homes the snapshot to today's file.
         const maxAgeDays = this._config.history.maxAgeDays;
         if (maxAgeDays > 0) {
-            this._store.sweepOldFiles(maxAgeDays)
-                .catch(e => log.error(`cleanup: ${e.message}`));
+            this._sweepOldFiles('startup');
             const sweepSec = Math.max(15, this._config.history.cleanupIntervalSec);
             this._cleanupTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sweepSec, () => {
-                try {
-                    this._store?.sweepOldFiles(maxAgeDays)
-                        .catch(e => log.error(`cleanup: ${e.message}`));
-                } catch (e) {
-                    log.error(`cleanup timer: ${e.message}`);
-                }
+                this._sweepOldFiles('timer');
                 return GLib.SOURCE_CONTINUE;
             });
         }
@@ -254,6 +250,23 @@ export default class CopyGnomeExtension extends Extension {
         this._ipc.start(this._ipcHandlers());
 
         log.info('enabled');
+    }
+
+    _sweepOldFiles(reason, opts = {}) {
+        try {
+            const maxAgeDays = this._config?.history?.maxAgeDays ?? 0;
+            if (!(maxAgeDays > 0)) {
+                if (reason.startsWith('new daily file'))
+                    log.info(`cleanup skipped reason=${reason} retention disabled`);
+                return;
+            }
+            if (reason.startsWith('new daily file'))
+                log.info(`cleanup requested reason=${reason} maxAgeDays=${maxAgeDays}`);
+            this._store?.sweepOldFiles(maxAgeDays, opts)
+                .catch(e => log.error(`cleanup ${reason}: ${e.message}`));
+        } catch (e) {
+            log.error(`cleanup ${reason}: ${e.message}`);
+        }
     }
 
     disable() {

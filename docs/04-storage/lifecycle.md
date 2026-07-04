@@ -53,7 +53,7 @@ Hot path:
 Flush policy:
 
 - The latest pending snapshot is appended once per `storage.flushIntervalSec` (default
-  1800s) by a periodic timer. There is no per-mutation debounce: copies only overwrite the
+  3600s) by a periodic timer. There is no per-mutation debounce: copies only overwrite the
   pending snapshot in memory, so each daily JSONL is written at most once per interval.
 - Periodic flush is append-only. It must not modify existing bytes, rewrite prior lines,
   move files, or compact old data.

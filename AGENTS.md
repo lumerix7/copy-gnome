@@ -13,9 +13,10 @@
   after a failed read. Wrapper reads sample the current clipboard (accepted stability
   tradeoff); stale-owner/epoch consistency is a separate future optimization. Details in
   [docs/03-clipboard/capture-pipeline.md](docs/03-clipboard/capture-pipeline.md).
-- A bounded periodic sweep deletes expired daily `clips-*.jsonl` files older than
-  `history.maxAgeDays` (default 3). It runs only after history load and never from
-  `disable()`; it deletes whole files by date and never rewrites contents. Details in
+- A bounded sweep deletes expired daily `clips-*.jsonl` files older than
+  `history.maxAgeDays` (default 3). It runs only after history load: once at startup,
+  periodically, and after the first successful append to a new daily file. It never runs
+  from `disable()`; it deletes whole files by date and never rewrites contents. Details in
   [docs/04-storage](docs/04-storage/README.md).
 - The DBus control service (`core/ipc.js`, consumed by the CLI history commands) starts
   only at the end of runtime start (after history load) and is unexported in `disable()`.

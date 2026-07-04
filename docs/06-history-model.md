@@ -47,7 +47,7 @@ single item append.
 | `items`     | sorted record array, newest/MRU first        |
 
 The store appends the newest pending snapshot once per `storage.flushIntervalSec`
-(default 1800s); there is no per-mutation write. If a snapshot line would exceed the
+(default 3600s); there is no per-mutation write. If a snapshot line would exceed the
 internal 64 MiB cap, the store keeps the most-recent prefix that fits and syncs the
 running history to that persisted subset.
 
@@ -130,10 +130,11 @@ target app config. See
 - `storage.textMaxBytes` and `storage.binaryMaxBytes` prevent oversized payloads from being
   stored.
 - `history.maxItems` is the only in-memory cap; it bounds the array shown in the popup.
-- `history.maxAgeDays` is a disk-retention policy, not an in-memory eviction: a periodic
-  sweep deletes daily `clips-*.jsonl` files older than N days (default 3, 0 = disabled). It
-  never touches the in-memory model - an old record stays in the popup as long as it remains
-  within `maxItems`. See [04-storage](04-storage/cleanup-and-limits.md#cleanup).
+- `history.maxAgeDays` is a disk-retention policy, not an in-memory eviction: a startup,
+  periodic, and new-daily-file sweep deletes daily `clips-*.jsonl` files older than N days
+  (default 3, 0 = disabled). It never touches the in-memory model - an old record stays in
+  the popup as long as it remains within `maxItems`. See
+  [04-storage](04-storage/cleanup-and-limits.md#cleanup).
 - The store has an additional 64 MiB hard cap per snapshot line.
 
 

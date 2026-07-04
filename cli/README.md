@@ -20,7 +20,7 @@ copy-gnome config set ui.pasteKeybindings '[{"keys":["ctrl","shift","v"],"apps":
 copy-gnome config set ui.skipClipboardWriteForRecentTopSec 3
 copy-gnome config set ui.popupTheme auto
 copy-gnome config set ui.popupOpacity 0.92
-copy-gnome config set storage.flushIntervalSec 1800
+copy-gnome config set storage.flushIntervalSec 3600
 copy-gnome config set storage.textMaxBytes 1048576
 copy-gnome config set storage.binaryMaxBytes 1048576
 copy-gnome config edit
