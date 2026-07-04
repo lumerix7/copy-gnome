@@ -20,6 +20,28 @@ const REQUEST_IFACE = 'org.freedesktop.portal.Request';
 // timer can't leak forever if the portal never answers.
 const RESPONSE_TIMEOUT_SEC = 600;
 
+function existingDirectory(path) {
+    try {
+        return typeof path === 'string' && path && GLib.file_test(path, GLib.FileTest.IS_DIR);
+    } catch (e) {
+        log.debug(`[save]: directory check failed path=${path ?? '(none)'}: ${e.message}`);
+        return false;
+    }
+}
+
+function pathVariant(path) {
+    return new GLib.Variant('ay', [...encodeUtf8(path), 0]);
+}
+
+export function defaultSaveDirectory() {
+    const candidates = [
+        GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD),
+        GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS),
+        GLib.get_home_dir(),
+    ];
+    return candidates.find(existingDirectory) ?? null;
+}
+
 const MIME_EXTENSIONS = {
     'image/png': 'png',
     'image/jpeg': 'jpg',
@@ -131,7 +153,11 @@ let _tokenCounter = 0;
  * Open the portal save dialog. Resolves with the chosen target URI, or null on
  * cancel/failure/timeout. Never rejects.
  */
-export function saveFileDialog({ title = 'Save clipboard item', suggestedName = 'clip.bin' } = {}) {
+export function saveFileDialog({
+    title = 'Save clipboard item',
+    suggestedName = 'clip.bin',
+    currentFolder = defaultSaveDirectory(),
+} = {}) {
     return new Promise(resolve => {
         const connection = Gio.DBus.session;
         let done = false;
@@ -191,6 +217,8 @@ export function saveFileDialog({ title = 'Save clipboard item', suggestedName = 
                 handle_token: new GLib.Variant('s', token),
                 current_name: new GLib.Variant('s', suggestedName),
             };
+            if (existingDirectory(currentFolder))
+                options.current_folder = pathVariant(currentFolder);
             connection.call(
                 PORTAL_BUS, PORTAL_PATH, FILECHOOSER_IFACE, 'SaveFile',
                 new GLib.Variant('(ssa{sv})', ['', title, options]),

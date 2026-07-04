@@ -4,6 +4,7 @@ import Shell from 'gi://Shell';
 
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
 import { log, setLevel } from './core/log.js';
 import { Paths } from './core/paths.js';
@@ -93,6 +94,14 @@ function normalizeFileUri(uri) {
     return uri;
 }
 
+function createNotificationSource() {
+    return new MessageTray.Source({ title: 'copy-gnome', iconName: 'edit-paste-symbolic' });
+}
+
+function createNotification(source, title, body) {
+    return new MessageTray.Notification({ source, title, body });
+}
+
 function normalizeUriListForRestore(uriList) {
     return uriList
         .split('\n')
@@ -130,6 +139,7 @@ export default class CopyGnomeExtension extends Extension {
         this._enabled = true;
         this._timers = new Set();
         this._keys = [];
+        this._notificationSource = null;
 
         this._paths = new Paths().resolve();
         this._config = loadConfig(this._paths.config);
@@ -302,6 +312,11 @@ export default class CopyGnomeExtension extends Extension {
         } catch (e) {
             log.warn(`indicator destroy failed: ${e.message}`);
         }
+        try {
+            this._notificationSource?.destroy?.();
+        } catch (e) {
+            log.warn(`notification source destroy failed: ${e.message}`);
+        }
 
         try {
             this._store?.closeSync();
@@ -322,6 +337,7 @@ export default class CopyGnomeExtension extends Extension {
         this._store = null;
         this._settings = null;
         this._config = null;
+        this._notificationSource = null;
 
         log.info('disabled');
     }
@@ -729,15 +745,69 @@ export default class CopyGnomeExtension extends Extension {
             if (!this._enabled)
                 return;
             const ok = await writeBytesToUri(uri, plan.bytes);
+            if (!this._enabled)
+                return;
             if (ok) {
                 log.info(`[save]: saved recordId=${rec.id} kind=${rec.kind} bytes=${plan.bytes.length} uri=${uri}`);
-                Main.notify('copy-gnome', `Saved: ${uriDisplayPath(uri)}`);
+                this._notifySaved(uri);
             } else {
                 Main.notify('copy-gnome', 'Save failed - see the journal for [save] lines');
             }
         } catch (e) {
             log.warn(`save record failed: ${e.message}`);
         }
+    }
+
+    _notifySaved(uri) {
+        const body = `Saved: ${uriDisplayPath(uri)}`;
+        try {
+            const source = this._savedNotificationSource();
+
+            const notification = createNotification(source, 'copy-gnome', body);
+            const show = () => {
+                showInFileManager([uri]).then(shown => {
+                    if (!shown)
+                        Main.notify('copy-gnome', 'Could not open the file manager');
+                });
+            };
+            try {
+                if (typeof notification.addAction === 'function')
+                    notification.addAction('Show in Files', show);
+            } catch (e) {
+                log.debug(`[save]: notification action unavailable: ${e.message}`);
+            }
+            try {
+                if (typeof notification.connect === 'function')
+                    notification.connect('activated', show);
+            } catch (e) {
+                log.debug(`[save]: notification activation unavailable: ${e.message}`);
+            }
+
+            if (typeof source.addNotification === 'function')
+                source.addNotification(notification);
+            else
+                Main.notify('copy-gnome', body);
+        } catch (e) {
+            log.warn(`[save]: action notification failed: ${e.message}`);
+            Main.notify('copy-gnome', body);
+        }
+    }
+
+    _savedNotificationSource() {
+        if (!this._notificationSource) {
+            const source = createNotificationSource();
+            try {
+                source.connect('destroy', destroyedSource => {
+                    if (this._notificationSource === destroyedSource)
+                        this._notificationSource = null;
+                });
+            } catch (e) {
+                log.debug(`[save]: notification source destroy hook unavailable: ${e.message}`);
+            }
+            Main.messageTray.add(source);
+            this._notificationSource = source;
+        }
+        return this._notificationSource;
     }
 
     // "Show in Files" for a file record (docs/07-ui.md). Existence is checked while the

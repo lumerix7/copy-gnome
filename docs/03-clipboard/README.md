@@ -27,15 +27,13 @@ the new contents asynchronously.
 
 ### Reading contents
 
-Two viable read paths:
+`owner-changed` still provides the source metadata used for `sourceKind`, MIME
+classification, queue context, and logs. Payload bytes are read through the Shell clipboard
+wrapper path instead of `Meta.SelectionSource.read_async()`.
 
-- **`Meta.SelectionSource`**: each `owner-changed` event provides a source. The monitor
-  enqueues that source and reads its content via `source.read_async(mimetype, ...)` /
-  `read_finish()`, so FIFO queue order and clipboard content stay tied to the same event.
-- **`Meta.Selection.get_async()`** for lower-level control (stream-based).
-
-Recommended: query `source.get_mimetypes()` to decide the type, then read the *best*
-representation from that same queued `source`.
+Do not call `Meta.SelectionSource.read_async()` for capture payloads. On GNOME 50 that
+native path has been observed to crash `gnome-shell` when a transient external owner is
+read. Empty or failed clipboard reads are skipped fail-closed.
 
 
 ### Mime priority

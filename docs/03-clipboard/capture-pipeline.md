@@ -30,13 +30,15 @@ Per-job pipeline lines carry `id=<uuid> seq=<n>`. Loop/lifecycle lines (drain st
 ### `job` (one per owner-changed; built by the enqueue side)
 
 ```
-job = { id, seq, source, sourceLabel, sourceKind, mimes }
+job = { id, seq, sourceLabel, sourceKind, mimes }
        sourceKind: 'memory' | 'non-memory'   // memory = Shell-owned (our writes, screenshots, caches)
 ```
 
 `sourceKind` + `mimes` are snapshotted **synchronously at receive** (the source may go stale
-before the drain reaches it). Content (`value`) is **not** read here - that is async, done on
-the drain side. No `staleReplayAfterSeq` - the drop decision needs no lookahead.
+before the drain reaches it). The native `Meta.SelectionSource` object itself is **not**
+retained on the job - payload reads go through the Shell clipboard wrapper, never the
+source. Content (`value`) is **not** read here - that is async, done on the drain side. No
+`staleReplayAfterSeq` - the drop decision needs no lookahead.
 
 
 ### `_lastContent` (single shared state, no TTL)
@@ -141,7 +143,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["1 dequeue next job in FIFO order"] --> B["2 privacy skip; classify mimes, pick mime, read content C and type via read_async"]
+    A["1 dequeue next job in FIFO order"] --> B["2 privacy skip; classify mimes, pick mime, read content C and type via clipboard wrapper"]
     B --> C{"3 compare last: type==last.type AND value==last.value"}
     C -- "yes and last.origin=restore" --> X1["drop - log echo"]
     C -- "yes and sourceKind=memory" --> X2["drop - log stale-replay"]
@@ -162,9 +164,14 @@ flowchart TD
 1. A single **drain** loop dequeues jobs in arrival (FIFO) order - reads never overlap.
 2. **Read** content: first skip concealed/secret selections (privacy, by `privacy.secretMimes`);
    then classify `job.mimes` (uri-list/x-special → file, image/png → image, text/plain → text),
-   pick the mime, and read `C` + its `type` from `job.source` via `read_async` (tied to *this*
-   event's source, not the live clipboard). If the chosen text reads back empty, fall through
-   to the image branch.
+   pick the mime, and read `C` + its `type` through the Shell clipboard wrapper path.
+   `Meta.SelectionSource.read_async()` is avoided because it can crash `gnome-shell` on
+   transient external owners. Each payload is read **at most once** per job: one wrapper
+   read returns a JS-owned copy, and all later size/type/drop decisions run on that copy.
+   The plain-text payload is read once per job and shared between the rich branch and its
+   text fallback (a rich fallback never issues a second plain read). MIME fallback retries
+   (e.g. `x-special/gnome-copied-files` → `text/uri-list`) are allowed only after a
+   **failed** read. If the chosen text reads back empty, fall through to the image branch.
 3. **Compare with `_lastContent`** - the drop test:
    `type == _last.type` **and** `value == _last.value`.
    `_lastContent` may be seeded from the history head at runtime start so memory twin
@@ -237,6 +244,24 @@ fail-closed (a wrong call yields at most a duplicate or a missed drop - never a 
 - **Read-before-drop cost.** An echo/replay is fully read (async, bounded by caps + 2 s
   timeout) before being dropped, and `_lastContent.value` holds the last content (for images,
   base64 up to the cap) until the next event - bounded and overwritten, not a leak.
+- **Wrapper reads sample current clipboard state.** Payload capture avoids
+  `Meta.SelectionSource.read_async()` because that native path can crash `gnome-shell` for
+  transient external owners. The queue still uses the owner-change job's MIME metadata, but
+  the payload read samples the current Shell clipboard wrapper state. Rapid owner changes can
+  therefore produce an empty/skipped read or a stale MIME/content mismatch. This is accepted
+  for now because stability beats exactly-once capture. Stale-owner / owner-epoch
+  consistency (skip a capture when the owner changed between a job's reads) is a separate
+  future optimization; if added, it must stay narrow - no global dequeue skip and no skip
+  on the file branch, or file-copy / memory-twin semantics break.
+- **Read once, then decide (implemented invariant).** Every payload read is a single wrapper
+  call (`_readSourceBytes`) that returns a JS-owned copy; size/type/drop/capture decisions
+  run on that copy and the clipboard is never re-read to re-check a payload. The plain-text
+  payload is read at most once per job and shared between the rich branch and its text
+  fallback. Plain text has no wrapper-side cap: it is read into memory first, then
+  size-checked on the JS copy (accepted tradeoff). MIME fallback retries are allowed only
+  after a failed read - once a read succeeds, decisions never leave the memory copy.
+  Re-reading the clipboard can race with a newer owner, produce different data, or cross a
+  less stable native boundary again.
 - **Screenshot capture rides the image path.** Capturing screenshots / memory images depends
   on `general.captureImages`, which `WARNING.md` flags as the risky GI path (prior `signal 11`
   on Shell 46). Disable it there if the session destabilises.

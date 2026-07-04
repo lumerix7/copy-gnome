@@ -1,6 +1,7 @@
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
+import { getContentResult as getClipboardContentResult, getText as getClipboardText } from './clipboard.js';
 import { log } from './log.js';
 import { PLAIN_TEXT_MIME, RICH_TEXT_MIMES, richComparablePlain, richComparableValue } from './payloads.js';
 
@@ -23,8 +24,6 @@ import { PLAIN_TEXT_MIME, RICH_TEXT_MIMES, richComparablePlain, richComparableVa
 // See docs/03-clipboard/capture-pipeline.md.
 
 const IMAGE_READ_FAILURE_LIMIT = 3;
-const READ_TIMEOUT_MS = 2000;
-const READ_CHUNK_BYTES = 64 * 1024;
 const DEBUG_TEXT_CHARS = 160;
 
 function supportedImageMime(mimes) {
@@ -233,7 +232,7 @@ export class Monitor {
         this._lastContent = null;
     }
 
-    // --- self-write / last-content state (see design.md) ---
+    // --- self-write / last-content state (see docs/03-clipboard/capture-pipeline.md) ---
 
     /** @returns {object|null} the current _lastContent snapshot. */
     getLastContent() {
@@ -378,10 +377,11 @@ export class Monitor {
         const sourceLabel = debugSource(source);
         const sourceKind = sourceKindFromLabel(sourceLabel);
         const rawMimes = this._readSourceMimes(source);
+        // Only sync snapshots are kept; the native source object itself is not retained
+        // (payload reads go through the Shell clipboard wrapper, not the source).
         const job = {
             id,
             seq,
-            source,
             sourceLabel,
             sourceKind,
             mimes: rawMimes,
@@ -431,8 +431,7 @@ export class Monitor {
 
             const imageMime = supportedImageMime(mimes);
             const hasUnsupportedImage = !imageMime && mimes.some(m => m.startsWith('image/'));
-            const plainMimes = textMimes(mimes);
-            const plainMime = plainMimes[0] ?? null;
+            const plainMime = textMimes(mimes)[0] ?? null;
             const richMime = richTextMime(mimes);
 
             if (has('text/uri-list') || has('x-special/gnome-copied-files')) {
@@ -446,7 +445,7 @@ export class Monitor {
                 let mime = fileMimes[0];
                 let result = null;
                 for (const candidateMime of fileMimes) {
-                    result = await this._readSourceBytes(job.source, candidateMime, this._maxItemBytes());
+                    result = await this._readSourceBytes(candidateMime, this._maxItemBytes());
                     if (this._stopped) return;
                     if (result.ok) {
                         mime = candidateMime;
@@ -489,23 +488,39 @@ export class Monitor {
                 return;
             }
 
+            // Shared text budget and per-job plain cache: the plain payload is read at most
+            // once per job; the rich branch and its text fallback reuse the same JS copy
+            // instead of issuing a second clipboard read.
+            const textMaxBytes = Math.min(this._maxItemBytes(), this._maxTextBytes());
+            const textCapName = this._maxTextBytes() <= this._maxItemBytes()
+                ? 'storage.textMaxBytes'
+                : 'history.maxItemBytes';
+            let plainRead = null;
+            const readPlainOnce = async () => {
+                if (plainRead !== null)
+                    return plainRead;
+                try {
+                    plainRead = await this._readSourceBytes(plainMime, textMaxBytes);
+                } catch (e) {
+                    log.debug(`${jobCtx(job)}: plain clipboard read failed reason=exception message=${String(e?.message ?? e)}`);
+                    plainRead = { ok: false, bytes: null, reason: 'read-error', bytesRead: 0, maxBytes: textMaxBytes };
+                }
+                return plainRead;
+            };
+
             if (richMime && plainMime) {
-                const maxBytes = Math.min(this._maxItemBytes(), this._maxTextBytes());
-                const capName = this._maxTextBytes() <= this._maxItemBytes()
-                    ? 'storage.textMaxBytes'
-                    : 'history.maxItemBytes';
-                const richResult = await this._readSourceBytes(job.source, richMime, maxBytes);
+                const richResult = await this._readSourceBytes(richMime, textMaxBytes);
                 if (this._stopped) return;
                 if (richResult.ok) {
-                    const plainResult = await this._readFirstTextSource(job, plainMimes, maxBytes, capName, 'rich plain');
+                    const plainResult = await readPlainOnce();
                     if (this._stopped) return;
                     let combinedBytes = richResult.bytes.length + (plainResult.ok ? plainResult.bytes.length : 0);
-                    if (plainResult.ok && combinedBytes <= maxBytes) {
+                    if (plainResult.ok && combinedBytes <= textMaxBytes) {
                         const companionPayloads = await this._readRichTextCompanions(
                             job,
                             mimes,
                             new Set([richMime, plainMime]),
-                            maxBytes - combinedBytes);
+                            textMaxBytes - combinedBytes);
                         if (this._stopped) return;
                         for (const payload of companionPayloads)
                             combinedBytes += payload.bytes;
@@ -549,57 +564,53 @@ export class Monitor {
                         }
                         log.debug(`${jobCtx(job)}: rich capture fallback reason=empty richBytes=${richResult.bytes.length} textBytes=${plainResult.bytes.length}`);
                     } else if (plainResult.ok) {
-                        log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=combined-cap bytes=${combinedBytes} maxBytes=${maxBytes} cap=${capName}`);
+                        log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=combined-cap bytes=${combinedBytes} maxBytes=${textMaxBytes} cap=${textCapName}`);
                     } else {
-                        const details = readLimitDetails(plainResult, capName, maxBytes);
-                        log.debug(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=plain-read-${plainResult.reason}${details} attemptedMimes=${plainResult.attemptedMimes?.join(',') || '(none)'}`);
+                        const details = readLimitDetails(plainResult, textCapName, textMaxBytes);
+                        log.debug(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=plain-read-${plainResult.reason}${details} plainMime=${plainMime}`);
                     }
                 } else {
-                    const details = readLimitDetails(richResult, capName, maxBytes);
+                    const details = readLimitDetails(richResult, textCapName, textMaxBytes);
                     log.warn(`${jobCtx(job)}: rich clipboard read fallback mime=${richMime} reason=${richResult.reason}${details}`);
                 }
             }
 
             // Prefer text when offered; many apps offer both text and image targets.
             if (plainMime) {
-                const maxBytes = Math.min(this._maxItemBytes(), this._maxTextBytes());
-                const capName = this._maxTextBytes() <= this._maxItemBytes()
-                    ? 'storage.textMaxBytes'
-                    : 'history.maxItemBytes';
-                const result = await this._readFirstTextSource(job, plainMimes, maxBytes, capName, 'text');
+                const result = await readPlainOnce();
                 if (this._stopped) return;
                 if (!result.ok) {
-                    const details = readLimitDetails(result, capName, maxBytes);
-                    log.warn(`${jobCtx(job)}: text clipboard read skipped mimes=${plainMimes.join(',') || '(none)'} reason=${result.reason}${details}`);
-                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mimes=${plainMimes.join(',') || '(none)'} reason=${result.reason}${details} remaining=${this._queue.length}`);
+                    const details = readLimitDetails(result, textCapName, textMaxBytes);
+                    log.warn(`${jobCtx(job)}: text clipboard read skipped mime=${plainMime} reason=${result.reason}${details}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=${result.reason}${details} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`${jobCtx(job)}: source read text mime=${result.mime} bytes=${result.bytes.length}`);
+                log.debug(`${jobCtx(job)}: source read text mime=${plainMime} bytes=${result.bytes.length}`);
                 const text = new TextDecoder().decode(result.bytes);
                 if (text && text.length > 0) {
                     log.debug(`${jobCtx(job)}: source text value="${debugText(text)}"`);
                     if (this._isFilePathTwin(job, text)) {
-                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=file-path-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=file-path-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
                     if (this._isRichPlainTwin(job, text)) {
-                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=rich-plain-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=rich-plain-twin bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
-                    const candidate = { kind: 'text', mime: result.mime, value: text };
+                    const candidate = { kind: 'text', mime: plainMime, value: text };
                     const dropReason = this._dropReason(job, candidate);
                     if (dropReason) {
                         this._notifySuppressedRepeat(job, candidate, dropReason);
-                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${result.mime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                        log.debug(`${jobCtx(job)}: queue handled status=dropped kind=text mime=${plainMime} reason=${dropReason} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                         return;
                     }
                     log.debug(`${jobCtx(job)}: capture text bytes=${result.bytes.length}`);
                     this._onCapture({ kind: 'text', id: job.id, seq: job.seq, mime: 'text/plain;charset=utf-8', text });
                     this.setLastContent({ id: job.id, origin: 'capture', sourceKind: job.sourceKind, source: job.sourceLabel, type: 'text', value: text });
-                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=text mime=${result.mime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
+                    log.debug(`${jobCtx(job)}: queue handled status=captured kind=text mime=${plainMime} bytes=${result.bytes.length} remaining=${this._queue.length}`);
                     return;
                 }
-                log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${result.mime} reason=empty remaining=${this._queue.length}`);
+                log.debug(`${jobCtx(job)}: queue handled status=skipped kind=text mime=${plainMime} reason=empty remaining=${this._queue.length}`);
             }
 
             if (imageMime || hasUnsupportedImage) {
@@ -624,7 +635,7 @@ export class Monitor {
                     log.debug(`${jobCtx(job)}: queue handled status=skipped kind=image reason=binary-cap-zero remaining=${this._queue.length}`);
                     return;
                 }
-                const result = await this._readSourceBytes(job.source, imageMime, maxBytes);
+                const result = await this._readSourceBytes(imageMime, maxBytes);
                 if (this._stopped) return;
                 if (!result.ok) {
                     this._noteImageReadFailure(result.reason, imageMime);
@@ -653,25 +664,6 @@ export class Monitor {
         }
     }
 
-    _readSourceStream(source, mime) {
-        if (!source || typeof source.read_async !== 'function' ||
-                typeof source.read_finish !== 'function' || typeof mime !== 'string')
-            return Promise.resolve({ ok: false, stream: null, reason: 'unsupported' });
-        return this._withTimeout(`selection source ${mime} read`,
-            finish => {
-                source.read_async(mime, null, (_source, result) => {
-                    try {
-                        finish({ ok: true, stream: source.read_finish(result), reason: '' });
-                    } catch (e) {
-                        log.debug(`selection source ${mime} read failed: ${e.message}`);
-                        finish({ ok: false, stream: null, reason: 'read-error' });
-                    }
-                });
-            },
-            { ok: false, stream: null, reason: 'timeout' },
-            { ok: false, stream: null, reason: 'read-error' });
-    }
-
     async _readRichTextCompanions(job, mimes, skipMimes, remainingBytes) {
         if (!(remainingBytes > 0))
             return [];
@@ -679,7 +671,7 @@ export class Monitor {
         for (const mime of RICH_TEXT_MIMES) {
             if (!mimes.includes(mime) || skipMimes.has(mime))
                 continue;
-            const result = await this._readSourceBytes(job.source, mime, remainingBytes);
+            const result = await this._readSourceBytes(mime, remainingBytes);
             if (this._stopped)
                 return out;
             if (!result.ok) {
@@ -701,145 +693,31 @@ export class Monitor {
         return out;
     }
 
-    async _readFirstTextSource(job, mimes, maxBytes, capName, purpose) {
-        if (!Array.isArray(mimes) || mimes.length === 0)
-            return { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes: [] };
-        if (!Number.isFinite(maxBytes) || maxBytes <= 0)
-            return { ok: false, bytes: null, reason: 'oversize', bytesRead: 0, maxBytes, attemptedMimes: [] };
-        if (!job?.source)
-            return { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes: [] };
-        const attemptedMimes = [];
-        let last = { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes, attemptedMimes };
-        for (const mime of mimes) {
-            if (typeof mime !== 'string' || mime.length === 0)
-                continue;
-            attemptedMimes.push(mime);
-            let result;
-            try {
-                result = await this._readSourceBytes(job.source, mime, maxBytes);
-            } catch (e) {
-                log.debug(`${jobCtx(job)}: ${purpose} clipboard read failed mime=${mime} reason=exception message=${String(e?.message ?? e)}`);
-                result = { ok: false, bytes: null, reason: 'read-error', bytesRead: 0, maxBytes };
-            }
-            if (this._stopped)
-                return { ok: false, bytes: null, reason: 'stopped', bytesRead: 0, maxBytes, attemptedMimes };
-            if (result.ok)
-                return { ...result, mime, attemptedMimes };
-            last = { ...result, mime, attemptedMimes };
-            const fallbackMime = mimes[attemptedMimes.length] ?? '';
-            if (fallbackMime) {
-                const details = readLimitDetails(result, capName, maxBytes);
-                log.debug(`${jobCtx(job)}: ${purpose} clipboard read failed mime=${mime} reason=${result.reason}${details} fallbackMime=${fallbackMime}`);
-            }
-        }
-        return last;
-    }
-
-    _withTimeout(label, start, timeoutValue, errorValue) {
-        return new Promise(resolve => {
-            let done = false;
-            let timer = 0;
-            const finish = value => {
-                if (done)
-                    return;
-                done = true;
-                if (timer) {
-                    try {
-                        GLib.Source.remove(timer);
-                    } catch (e) {
-                        // already fired/removed
-                    }
-                    timer = 0;
-                }
-                resolve(value);
-            };
-            timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, READ_TIMEOUT_MS, () => {
-                timer = 0;
-                log.warn(`${label} timed out`);
-                finish(timeoutValue);
-                return GLib.SOURCE_REMOVE;
-            });
-            try {
-                start(finish);
-            } catch (e) {
-                log.warn(`${label} failed: ${e.message}`);
-                finish(errorValue);
-            }
-        });
-    }
-
-    async _readSourceBytes(source, mime, maxBytes) {
+    // One wrapper read per payload: the result is already detached into JS-owned memory
+    // (Uint8Array), so all size/type/drop decisions happen on this copy and the clipboard
+    // is never re-read to re-check a payload. Timeouts live in the clipboard wrapper.
+    // WARNING: Do not call Meta.SelectionSource.read_async() here. On GNOME 50, starting
+    // that native read for transient external owners can crash gnome-shell.
+    async _readSourceBytes(mime, maxBytes) {
+        if (typeof mime !== 'string')
+            return { ok: false, bytes: null, reason: 'unsupported', bytesRead: 0, maxBytes };
         if (!Number.isFinite(maxBytes) || maxBytes <= 0)
             return { ok: false, bytes: null, reason: 'oversize', bytesRead: 0, maxBytes };
-        const opened = await this._readSourceStream(source, mime);
-        if (!opened.ok)
-            return { ok: false, bytes: null, reason: opened.reason, bytesRead: 0, maxBytes };
-        const stream = opened.stream;
-        if (!stream)
-            return { ok: false, bytes: null, reason: 'empty', bytesRead: 0, maxBytes };
-        const chunks = [];
-        let total = 0;
-        try {
-            while (true) {
-                const chunk = await this._readStreamChunk(stream, mime);
-                if (!chunk.ok)
-                    return { ok: false, bytes: null, reason: chunk.reason };
-                const data = chunk.bytes?.get_data();
-                if (!data || data.length === 0)
-                    break;
-                total += data.length;
-                if (total > maxBytes)
-                    return { ok: false, bytes: null, reason: 'oversize', bytesRead: total, maxBytes };
-                chunks.push(Uint8Array.from(data));
-            }
-        } catch (e) {
-            log.warn(`selection source ${mime} stream read failed: ${e.message}`);
-            return { ok: false, bytes: null, reason: 'read-error', bytesRead: total, maxBytes };
-        } finally {
-            await this._closeStream(stream);
+        if (TEXT_MIMES.includes(mime) || mime.startsWith('text/plain')) {
+            // Plain text has no wrapper-side cap: read it into memory first, then check
+            // the size on the JS copy (accepted tradeoff, see capture-pipeline.md).
+            const text = await getClipboardText();
+            if (!text)
+                return { ok: false, bytes: null, reason: 'empty', bytesRead: 0, maxBytes };
+            const bytes = new TextEncoder().encode(text);
+            if (bytes.length > maxBytes)
+                return { ok: false, bytes: null, reason: 'oversize', bytesRead: bytes.length, maxBytes };
+            return { ok: true, bytes, reason: '', bytesRead: bytes.length, maxBytes };
         }
-        if (total <= 0)
-            return { ok: false, bytes: null, reason: 'empty', bytesRead: total, maxBytes };
-        const out = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-            out.set(chunk, offset);
-            offset += chunk.length;
-        }
-        return { ok: true, bytes: out, reason: '', bytesRead: total, maxBytes };
-    }
-
-    _readStreamChunk(stream, mime) {
-        return this._withTimeout(`selection source ${mime} stream read`,
-            finish => {
-                stream.read_bytes_async(READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, null,
-                    (_stream, result) => {
-                        try {
-                            finish({ ok: true, bytes: stream.read_bytes_finish(result), reason: '' });
-                        } catch (e) {
-                            log.warn(`selection source ${mime} stream read failed: ${e.message}`);
-                            finish({ ok: false, bytes: null, reason: 'read-error' });
-                        }
-                    });
-            },
-            { ok: false, bytes: null, reason: 'timeout' },
-            { ok: false, bytes: null, reason: 'read-error' });
-    }
-
-    _closeStream(stream) {
-        return this._withTimeout('selection source stream close',
-            finish => {
-                stream.close_async(GLib.PRIORITY_DEFAULT, null, (_stream, result) => {
-                    try {
-                        stream.close_finish(result);
-                    } catch (e) {
-                        // ignore close failures on a transient clipboard stream
-                    }
-                    finish(null);
-                });
-            },
-            null,
-            null);
+        const result = await getClipboardContentResult(mime, maxBytes);
+        if (!result.ok)
+            return { ok: false, bytes: null, reason: result.reason, bytesRead: 0, maxBytes };
+        return { ok: true, bytes: result.bytes, reason: '', bytesRead: result.bytes.length, maxBytes };
     }
 
     _noteImageReadFailure(reason, mime) {
