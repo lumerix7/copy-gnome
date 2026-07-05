@@ -69,7 +69,7 @@ general:
   captureImages: true               # screenshot/image capture; risky inside GNOME Shell
 
 history:
-  maxItems: 200                     # visible history count, max 1000
+  maxItems: 500                     # visible history count, max 1000
   maxItemBytes: 4194304             # 4 MiB default; max 16 MiB
   maxAgeDays: 3                     # 0 = keep all daily files; N deletes clips-*.jsonl older than N days
   cleanupIntervalSec: 86400         # seconds; periodic expired-file sweep interval, 15..864000

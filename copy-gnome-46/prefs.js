@@ -347,7 +347,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         });
         const group = new Adw.PreferencesGroup({
             title: 'Limits',
-            description: 'Default 200 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
+            description: 'Default 500 items x 4 MiB. Each item can be up to 16 MiB. If a snapshot reaches the internal 64 MiB cap, oldest entries are trimmed.',
         });
 
         group.add(this._spinRow('maxItems', 'Max history items', 1, 1000, 1,

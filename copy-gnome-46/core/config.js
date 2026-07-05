@@ -13,7 +13,7 @@ export const DEFAULTS = {
         captureImages: true,
     },
     history: {
-        maxItems: 200,
+        maxItems: 500,
         maxItemBytes: 4194304,      // 4096 KiB (4 MiB)
         maxAgeDays: 3,              // 0 = keep all daily files; N deletes clips-*.jsonl older than N days
         cleanupIntervalSec: 86400,  // periodic expired-file sweep interval (seconds), 15..864000

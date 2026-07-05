@@ -10,7 +10,7 @@ export const DEFAULTS = {
     captureImages: true,
   },
   history: {
-    maxItems: 200,
+    maxItems: 500,
     maxItemBytes: 4194304,
     maxAgeDays: 3,
     cleanupIntervalSec: 86400,

@@ -25,6 +25,7 @@ test("no config file -> defaults, no warnings or errors", () => {
     assert.equal(r.file, null);
     assert.deepEqual(r.warnings, []);
     assert.deepEqual(r.errors, []);
+    assert.equal(r.config.history.maxItems, 500);
     assert.deepEqual(r.config, DEFAULTS);
   } finally {
     cleanup(dir);
