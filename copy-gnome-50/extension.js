@@ -216,6 +216,7 @@ export default class CopyGnomeExtension extends Extension {
                 anchorActor,
             }),
             onClear: () => this._history.clear(),
+            onPreferences: () => this.openPreferences(),
         });
         Main.panel.addToStatusArea(UUID, this._indicator);
 

@@ -32,7 +32,7 @@ class ConfirmMenuItem extends PopupMenu.PopupMenuItem {
 
 export const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
-    _init({ onOpen, onShow, onClear }) {
+    _init({ onOpen, onShow, onClear, onPreferences }) {
         // WARNING: keep dontCreateMenu=true. PanelMenu.Button's real menu installs its own
         // click gesture and treats primary click as menu toggle on GNOME 50. This indicator
         // needs primary click for history popup and secondary click for the context menu.
@@ -41,6 +41,7 @@ class Indicator extends PanelMenu.Button {
         this._onOpen = onOpen;
         this._onShow = onShow ?? onOpen;
         this._onClear = onClear ?? (() => {});
+        this._onPreferences = onPreferences ?? (() => {});
         this._clearArmed = false;
         this._clearConfirmTimer = 0;
         this._clearItem = null;
@@ -61,6 +62,8 @@ class Indicator extends PanelMenu.Button {
         this._contextMenu.addAction('Show', () => this._show());
         this._clearItem = new ConfirmMenuItem('Clear history', event => this._onClearMenu(event));
         this._contextMenu.addMenuItem(this._clearItem);
+        this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._contextMenu.addAction('Preferences', () => this._openPreferences());
 
         // Keyboard activation (Top Bar navigation → Enter/Space) opens the popup too.
         this.connect('key-press-event', (_actor, event) => {
@@ -101,6 +104,15 @@ class Indicator extends PanelMenu.Button {
             this._onShow?.(this, targetWindow);
         } catch (e) {
             log.warn(`indicator show failed: ${e.message}`);
+        }
+    }
+
+    _openPreferences() {
+        try {
+            this._contextMenu?.close?.();
+            this._onPreferences();
+        } catch (e) {
+            log.warn(`indicator preferences failed: ${e.message}`);
         }
     }
 
