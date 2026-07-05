@@ -35,6 +35,7 @@ rollover logic.
 - Each line is one complete sorted history snapshot, not an operation.
 - The latest valid snapshot line is the durable history view after restart.
 - Runtime search and popup operate only from memory.
+- Records require derived `contentBytes` and `contentSha256`; an incomplete snapshot is invalid.
 - The Shell extension appends snapshots and may delete whole expired daily files; it never
   rewrites, truncates, compacts, or repairs clip-file contents.
 - Current records use a compact single-payload shape. Rich text should move toward a

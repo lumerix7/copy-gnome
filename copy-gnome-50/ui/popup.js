@@ -290,9 +290,27 @@ export class Popup {
         this._drag = null;
         this._moveBounds = null;
         this._popupTheme = 'dark';
+        this._localHistoryMutation = false;
     }
 
     get visible() { return this._visible; }
+
+    refresh() {
+        if (!this._visible || this._localHistoryMutation)
+            return;
+        const selectedId = this._rows[this._selected]?.rec?.id ?? null;
+        const fallbackIndex = this._selected;
+        this._rebuild();
+        if (this._rows.length === 0)
+            return;
+        let next = selectedId == null
+            ? -1
+            : this._rows.findIndex(row => row.rec?.id === selectedId);
+        if (next < 0)
+            next = Math.min(Math.max(fallbackIndex, 0), this._rows.length - 1);
+        this._select(next);
+        log.debug(`[popup]: history refreshed rows=${this._rows.length} selected=${next + 1} selectedId=${this._rows[next]?.rec?.id ?? '(none)'}`);
+    }
 
     // opts: { placement: 'center'|'panel', anchorActor }. The ONLY difference between the
     // two callers is placement; both share the same translucent styling and all logic.
@@ -670,10 +688,13 @@ export class Popup {
 
         this._disarmClear();
         this._clearItemContextMenu();
+        this._localHistoryMutation = true;
         try {
             this._onClear();
         } catch (e) {
             log.warn(`popup clear failed: ${e.message}`);
+        } finally {
+            this._localHistoryMutation = false;
         }
         // Reset the filter so the now-empty history shows "(empty)", not "(no matches)".
         this._entry?.set_text('');
@@ -906,11 +927,14 @@ export class Popup {
         }
         const recordId = rec.id;
         this._clearItemContextMenu();
+        this._localHistoryMutation = true;
         try {
             this._onRemove(rec);
             log.debug(`[popup]: item removed recordId=${recordId}`);
         } catch (e) {
             log.warn(`popup item remove failed recordId=${recordId}: ${e.message}`);
+        } finally {
+            this._localHistoryMutation = false;
         }
         this._rebuild();
     }

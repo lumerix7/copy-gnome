@@ -133,6 +133,18 @@ function validKindPayloads(rec) {
     return false;
 }
 
+function normalizeContentIdentity(obj) {
+    if (Number.isInteger(obj?.contentBytes) && obj.contentBytes >= 0 &&
+            typeof obj.contentSha256 === 'string' &&
+            /^[0-9a-f]{64}$/.test(obj.contentSha256)) {
+        return {
+            contentBytes: obj.contentBytes,
+            contentSha256: obj.contentSha256,
+        };
+    }
+    return null;
+}
+
 function normalizeRecord(obj, maxLineBytes) {
     if (!obj || typeof obj !== 'object')
         return null;
@@ -150,6 +162,9 @@ function normalizeRecord(obj, maxLineBytes) {
     if (!payloads)
         return null;
 
+    const identity = normalizeContentIdentity(obj);
+    if (!identity)
+        return null;
     const rec = {
         id: obj.id,
         kind: obj.kind,
@@ -158,6 +173,7 @@ function normalizeRecord(obj, maxLineBytes) {
         createdAt: obj.createdAt,
         usedAt: obj.usedAt,
         payloads,
+        ...identity,
     };
 
     if (!validKindPayloads(rec))
@@ -182,7 +198,8 @@ function sortRecords(records) {
 }
 
 function normalizeSnapshot(obj, maxLineBytes) {
-    if (!obj || obj.type !== 'history' || obj.version !== 1 || !Array.isArray(obj.items))
+    if (!obj || obj.type !== 'history' || !Number.isFinite(obj.writtenAt) ||
+            !Array.isArray(obj.items))
         return null;
 
     const out = [];
@@ -190,7 +207,7 @@ function normalizeSnapshot(obj, maxLineBytes) {
     for (const item of obj.items) {
         const rec = normalizeRecord(item, maxLineBytes);
         if (!rec || seenIds.has(rec.id))
-            continue;
+            return null;
         seenIds.add(rec.id);
         out.push(rec);
     }
@@ -355,7 +372,10 @@ export class Store {
     }
 
     _snapshotItem(rec) {
-        return {
+        const identity = normalizeContentIdentity(rec);
+        if (!identity)
+            throw new Error(`invalid history content identity id=${rec?.id ?? '(none)'}`);
+        const item = {
             id: rec.id,
             kind: rec.kind,
             mime: rec.mime,
@@ -368,13 +388,14 @@ export class Store {
                 value: p.value,
                 bytes: p.bytes,
             })) : [],
+            ...identity,
         };
+        return item;
     }
 
     _snapshotForRecords(records) {
         return {
             type: 'history',
-            version: 1,
             writtenAt: GLib.get_real_time(),
             items: sortRecords(records).map(rec => this._snapshotItem(rec)),
         };

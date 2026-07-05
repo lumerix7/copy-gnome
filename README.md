@@ -83,6 +83,13 @@ copy-gnome clear --yes
 copy-gnome popup                   # toggle the history popup
 ```
 
+Run the repository checks (46/50 sync, GJS history regression, extension syntax, and CLI
+checks/tests) before delivery:
+
+```sh
+./scripts/check.sh
+```
+
 The CLI is a normal Node package (`@clipboard/copy-gnome`) with the `copy-gnome` binary.
 It does not import GNOME Shell or extension runtime code, so `doctor`, `logs`, `config`,
 `disable`, and `repair` remain useful when the extension is broken; the history commands

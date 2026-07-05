@@ -377,6 +377,7 @@ export default class CopyGnomeExtension extends Extension {
 
     _onHistoryChange() {
         this._indicator?.refresh();
+        this._popup?.refresh();
     }
 
     _seedLastContentFromHistory() {
@@ -560,6 +561,12 @@ export default class CopyGnomeExtension extends Extension {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return false;
+            const live = this._history.getById(rec?.id);
+            if (!live) {
+                log.warn(`[restore]: skipped recordId=${rec?.id ?? '(none)'} reason=stale-record`);
+                return false;
+            }
+            rec = live;
             const recentTop = this._recentTopRestoreWindow(rec, this._config?.ui?.skipClipboardWriteForRecentTopSec ?? 0);
             // Usually restore writes to the real system clipboard first. The recent row-1
             // shortcut skips only that write; validation, MRU touch, and paste continue.

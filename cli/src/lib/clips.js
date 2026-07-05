@@ -92,13 +92,17 @@ export function repairLatestClip(dataDir, opts = {}) {
 }
 
 function validateSnapshot(obj) {
-  if (!obj || obj.type !== "history" || obj.version !== 1 || !Array.isArray(obj.items))
+  if (!obj || obj.type !== "history" || !Number.isFinite(obj.writtenAt) ||
+      !Array.isArray(obj.items))
     return { ok: false, message: "latest snapshot has invalid envelope" };
   for (const item of obj.items) {
     if (!item || typeof item.id !== "string" || typeof item.kind !== "string")
       return { ok: false, message: "latest snapshot has invalid item" };
     if (typeof item.mime !== "string" || !Array.isArray(item.payloads) || item.payloads.length === 0)
       return { ok: false, message: "latest snapshot has invalid item" };
+    if (!Number.isInteger(item.contentBytes) || item.contentBytes < 0 ||
+        typeof item.contentSha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.contentSha256))
+      return { ok: false, message: "latest snapshot has invalid content identity" };
     for (const payload of item.payloads) {
       if (!payload || typeof payload.mime !== "string" || typeof payload.encoding !== "string" ||
           typeof payload.value !== "string" || typeof payload.bytes !== "number")
@@ -116,54 +120,56 @@ function readLastLine(file) {
       return { line: "", size, start: 0, end: 0, oversized: false };
 
     const chunkSize = 1024 * 1024;
-    let pos = size;
-    let buffers = [];
+    // Exclude the normal JSONL terminator before scanning chunks. If it remains in a later
+    // combined buffer, a multi-chunk line mistakes that terminator for the preceding line
+    // boundary and returns an empty string.
+    let logicalEnd = size;
+    const finalByte = Buffer.allocUnsafe(1);
+    fs.readSync(fd, finalByte, 0, 1, size - 1);
+    if (finalByte[0] === 0x0a)
+      logicalEnd--;
+
+    let pos = logicalEnd;
+    const buffers = [];
     let buffered = 0;
-    let dropTrailingNewline = true;
 
     while (pos > 0) {
       const want = Math.min(chunkSize, pos);
       pos -= want;
       const chunk = Buffer.allocUnsafe(want);
       fs.readSync(fd, chunk, 0, want, pos);
-      buffers.unshift(chunk);
-      buffered += want;
 
-      const combined = Buffer.concat(buffers, buffered);
-      let end = combined.length;
-      if (dropTrailingNewline && combined[end - 1] === 0x0a)
-        end--;
-      dropTrailingNewline = false;
-
-      const nl = combined.lastIndexOf(0x0a, end - 1);
+      const nl = chunk.lastIndexOf(0x0a);
       if (nl >= 0) {
+        const suffix = chunk.subarray(nl + 1);
+        buffers.unshift(suffix);
+        buffered += suffix.length;
         const start = pos + nl + 1;
-        const line = combined.subarray(nl + 1, end).toString("utf8");
+        if (buffered > MAX_SNAPSHOT_LINE_BYTES)
+          return { line: "", size, start, end: logicalEnd, oversized: true };
+        const line = Buffer.concat(buffers, buffered).toString("utf8");
         return {
           line,
           size,
           start,
-          end: pos + end,
-          oversized: Buffer.byteLength(line) > MAX_SNAPSHOT_LINE_BYTES,
+          end: logicalEnd,
+          oversized: false,
         };
       }
 
-      if (end > MAX_SNAPSHOT_LINE_BYTES + 1) {
-        return { line: "", size, start: null, end: size, oversized: true };
-      }
+      buffers.unshift(chunk);
+      buffered += want;
+      if (buffered > MAX_SNAPSHOT_LINE_BYTES)
+        return { line: "", size, start: null, end: logicalEnd, oversized: true };
     }
 
-    const combined = Buffer.concat(buffers, buffered);
-    let end = combined.length;
-    if (combined[end - 1] === 0x0a)
-      end--;
-    const line = combined.subarray(0, end).toString("utf8");
+    const line = Buffer.concat(buffers, buffered).toString("utf8");
     return {
       line,
       size,
       start: 0,
-      end,
-      oversized: Buffer.byteLength(line) > MAX_SNAPSHOT_LINE_BYTES,
+      end: logicalEnd,
+      oversized: false,
     };
   } finally {
     fs.closeSync(fd);

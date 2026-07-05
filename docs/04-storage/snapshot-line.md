@@ -7,7 +7,6 @@
 ```json
 {
   "type": "history",
-  "version": 1,
   "writtenAt": 1782610200000000,
   "items": []
 }
@@ -16,13 +15,12 @@
 | Field       | Required | Type   | Meaning                                    |
 |-------------|----------|--------|--------------------------------------------|
 | `type`      | yes      | string | Snapshot type, currently always `history`. |
-| `version`   | yes      | number | Snapshot schema version, currently `1`.    |
 | `writtenAt` | yes      | number | Local write time in GLib microseconds.     |
 | `items`     | yes      | array  | Sorted history records, newest first.      |
 
 Rules:
 
-- A line is valid only if it parses as JSON, has `version:1`, matches schema, and stays
+- A line is valid only if it parses as JSON, matches the current schema, and stays
   under internal size caps.
 - Normal startup reads a bounded tail and loads only the newest non-empty snapshot line.
 - If loading any candidate file fails, do not repair or move files; start with empty history
@@ -43,6 +41,8 @@ Record fields:
 | `kind`      | yes      | string | Logical item kind: `text`, `rich`, `file`, `image`, `binary`.     |
 | `mime`      | yes      | string | Primary MIME. This should match `payloads[0].mime`.               |
 | `bytes`     | yes      | number | Sum of raw bytes for persisted payload entries.                   |
+| `contentBytes` | yes      | number | Byte length of length-framed canonical content. |
+| `contentSha256` | yes      | string | Lowercase SHA-256 of canonical content.       |
 | `createdAt` | yes      | number | First capture time in GLib microseconds.                          |
 | `usedAt`    | yes      | number | Last restore/touch time in GLib microseconds.                     |
 | `payloads`  | yes      | array  | One or more MIME payload entries. Primary payload first.          |
@@ -59,8 +59,13 @@ Payload entry fields:
 Do not write top-level `text`, `data`, `uri`, or `encoding`. All actual clipboard payload
 values live in `payloads`; top-level fields are metadata only.
 
-There is no content hash field. The runtime self-write guard matches the immediately
-previous clipboard content directly.
+History uses `kind + contentBytes + contentSha256` only as a candidate index, then compares
+the underlying record fields exactly before deleting anything. Both identity fields are
+required; a missing or malformed field invalidates the snapshot. The monitor self-write guard
+independently matches the immediately previous clipboard content directly.
+
+The payload examples below omit these two derived identity fields for readability; actual new
+snapshot writes include them.
 
 Proposed rich-text record:
 

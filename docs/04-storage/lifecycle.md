@@ -20,11 +20,11 @@ line is the only durable history view after restart; if it is invalid, startup b
 3. Read only enough tail bytes to contain one internal maximum snapshot line.
 4. Parse the newest non-empty line only.
 5. Sort by effective recency, newest first.
-6. Start with empty history if the file is missing, unreadable, not schema `version:1`, or
-   the newest line is invalid.
+6. Start with empty history if the file is missing, unreadable, or the newest line does not
+   match the current schema.
 7. Never move, copy, rewrite, or truncate old clip files during startup.
 8. Opening/creating the current day file is allowed only so future writes can append.
-9. Do not repair or migrate old schema lines during startup.
+9. Do not repair, migrate, rewrite, or scan old schema lines during startup.
 
 
 ## Day Switching

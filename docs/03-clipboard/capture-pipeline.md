@@ -5,7 +5,9 @@
 > synchronously-available fields and pushes a job; the **drain side** does all the work
 > (read content, compare-with-last, drop/capture). Agreed model: single `_lastContent`,
 > **no TTL**, drop decided by consecutive content match (same `type` + same `value`),
-> no history lookup, no hash, no enqueue-time marking, no grace window; a uuid `id` is threaded through the whole
+> no monitor/enqueue history lookup or hash, no enqueue-time marking, no grace window; a
+> successful `history.add()` separately uses persisted content identity plus exact verification;
+> a uuid `id` is threaded through the whole
 > lifecycle. File-copy capture/restore policy is documented separately in
 > [file-twin-design](file-twin-design.md). Accepted tradeoffs are listed under
 > [Known limitations](#known-limitations).
@@ -61,9 +63,9 @@ split the log reason. `id`/`sourceKind`/`source` are context/logging.
 
 **Why `type` + `value`:** only the immediately previous clipboard payload is compared.
 This catches restore echoes, stale memory replays, and Wayland/clipboard-manager owner
-re-announces without restoring old history-wide dedup. `type` guards against a text and a
-file/image sharing a string. Accepted tradeoff: consecutive identical user copies collapse
-to one visible entry.
+re-announces without involving history lookup. `type` guards against a text and a file/image
+sharing a string. Accepted tradeoff: consecutive identical user copies collapse to one
+visible entry. Non-consecutive exact matches are handled later by `history.add()`.
 
 
 ## Logging levels
@@ -75,12 +77,15 @@ convention across all four flows:
 - **debug** - every routine step (the normal path). Enqueue: received, job built, pushed.
   Drain: dequeued, source read, compare result, **drop reason** (`echo` / `stale-replay` / `same-last`),
   capture, `setLastContent`. File restore: target app class and selected restore mode.
-  Restore: backup/set/touch steps. Also benign skips (concealed selection, empty content).
+  Restore: backup/set/touch steps. History: normal index rebuild and visible-popup refresh.
+  Also benign skips (concealed selection, empty content).
 - **info** - a notch above routine: user-meaningful milestones at default level, e.g.
-  `restored id=...  kind=...  bytes=... `, history loaded (`N entries`).
+  `restored id=... kind=... bytes=...`, history loaded (`N entries`), exact older records
+  removed (`headId`, `kind`, `bytes`, `removed`). Content and digests are not logged.
 - **warn** - recoverable anomalies that skip work but never crash/hang the shell: clipboard
   or source read timeout/failure, oversized item skipped (exceeds payload cap), restore
-  write failed/aborted, file read skipped, suppressed-repeat top mismatch.
+  write failed/aborted, stale popup record activation, file read skipped, suppressed-repeat
+  top mismatch, fingerprint failure, or slow fingerprint/index work.
 - **error** - serious but still fail-closed: image capture disabled for the session after
   repeated read failures; config parse failure.
 
@@ -192,7 +197,12 @@ flowchart TD
    fallback embedded in `_lastContent.value`, **drop**, log `rich-plain-twin`. This catches
    stale memory plain fallbacks after a rich capture without treating rich events as file
    path twins.
-6. **Capture:** `history.add` using `job.id` as the record id, then
+6. **Capture:** `history.add` using `job.id` as the record id. The new record is kept as the
+   head; `kind + contentBytes + contentSha256` selects candidates, digest matches
+   are verified field-by-field, and exact older matches are removed in one batch before
+   capacity eviction. Older history records are not compared with each other; the final
+   reference filter is at most O(N), and this in-memory cleanup never writes the system
+   clipboard. Then
    `setLastContent({ type, value, origin:'capture', sourceKind:job.sourceKind, source, id:job.id })`.
    For suppressed repeats, extension bookkeeping verifies the current top history record has
    the same kind and payload, then `history.touch(top)` updates `usedAt` and queues the
@@ -235,9 +245,9 @@ fail-closed (a wrong call yields at most a duplicate or a missed drop - never a 
   deliberate cost of one slot instead of a separate self-write field.
 - **Consecutive same content collapses.** Copying the exact same payload twice in a row
   produces one visible entry; the top entry's `usedAt` is refreshed if it still matches the
-  dropped payload. This is intentional for stability on Wayland owner re-announce paths, and
-  is still not old dedup because older matching history records are never searched or
-  promoted.
+  dropped payload. This remains a monitor-level stability guard for Wayland owner re-announce
+  paths. Separately, a captured non-consecutive repeat becomes the new head and removes only
+  older exact matches selected by the content-identity index.
 - **Replay of older-than-last content.** Only the most-recent content is remembered, so a
   replay of content *older* than the last capture (`copy aaa → copy bbb → replay aaa`) is not
   recognised and is captured. Rare.

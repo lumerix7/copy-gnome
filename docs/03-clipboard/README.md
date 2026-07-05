@@ -55,14 +55,18 @@ write-back** when feasible:
 ## Capture pipeline
 
 `owner-changed` → read mimes → classify → **privacy filter** → build a candidate entry
-→ **insert at front** of `history.js` as a new record (every capture is kept)
+→ **insert at front** of `history.js` as a new record → use its content identity to select
+and exactly verify older kind/MIME/payload matches → batch-remove those matches
 → mark store dirty.
 
 Monitor queue processing is read-only: it never writes back to the system clipboard and
 never computes/stores a content hash. It only suppresses consecutive identical clipboard
-payloads via the monitor's single `_lastContent` slot; it does not search or merge older
-history records. Clipboard writes happen only when the user activates an existing history
-entry.
+payloads via the monitor's single `_lastContent` slot; it does not search history. The
+successful `history.add()` path separately uses persisted
+`kind + contentBytes + contentSha256` identity, then field-by-field verification, to
+batch-remove exact older matches. Both identity fields are required in stored records. Older
+records are not compared with each other. Monitor/history cleanup never writes the clipboard;
+explicit restore/use/copy operations do.
 
 File capture creates exactly one **file** entry from `text/uri-list`/`x-special`. It does
 not wait for, synthesize, or promote a separate `text/plain` path entry. The file entry keeps
@@ -97,7 +101,9 @@ remembering the exact content we just wrote in the monitor's single `_lastConten
 (`origin=restore`, no TTL). Any next queued read whose `type` + `value` matches that slot is
 skipped before it reaches history, so our own writes and Wayland owner re-announces are not
 re-captured as new entries. Consecutive user copies of the exact same payload also collapse
-to one visible entry; older matching history records are never searched or promoted.
+to one visible entry. If a non-consecutive copy reaches history, the new record remains first
+and content-identity candidates are verified exactly before older matches are removed in
+one batch.
 
 
 ## Write-back

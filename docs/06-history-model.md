@@ -15,14 +15,28 @@ records: [ rec0 /* MRU */, rec1, rec2, ... ]
 ```
 
 - Ordering is `usedAt` descending.
-- A new capture always creates a new record.
+- A successful capture creates a new record and keeps it as the latest/MRU entry.
 - Restoring/selecting an existing record updates its `usedAt` and moves it to the front.
-- There is no content hash and no deduplication. Re-copying the same visible content can
-  produce another record if the monitor captures another real copy.
+- On insertion, history computes the new head's content key:
+  `kind + contentBytes + contentSha256`. The digest covers the primary `mime`, total byte
+  count, payload count, and every ordered payload field (`mime`, `encoding`, `bytes`, `value`)
+  using length-framed UTF-8 bytes. The index selects only matching candidates; every digest
+  match is still compared field-by-field, so a theoretical SHA-256 collision cannot delete a
+  different record. Exact older matches are removed in one batch before `maxItems` eviction.
+  Older records are never compared with each other; filtering removed object references is at
+  most one O(N) pass, not an all-pairs content comparison.
+- `contentBytes` and `contentSha256` are required persisted record fields. They are loaded
+  directly without hashing the payload again; a missing or malformed identity invalidates the
+  snapshot. The in-memory bucket index itself is rebuilt on load/store trim and is not exposed
+  through IPC. Fingerprint failure skips dedup for that record rather than blocking capture;
+  slow per-record and full-index builds are logged without content.
 - The monitor may suppress a consecutive identical clipboard payload before it reaches
   history; if the current top record has the same payload, its `usedAt` is refreshed and the
   normal async snapshot path persists that update. This is runtime replay filtering, not
-  history-level deduplication.
+  insertion-time history cleanup.
+- Insertion cleanup is in-memory history maintenance only. It does not write the system
+  clipboard. The latest pending snapshot reflects the compacted history, but older lines in
+  append-only JSONL files are not rewritten.
 
 
 ## Snapshot JSONL
@@ -33,7 +47,6 @@ single item append.
 ```json
 {
   "type": "history",
-  "version": 1,
   "writtenAt": 1782734910723763,
   "items": []
 }
@@ -42,7 +55,6 @@ single item append.
 | field       | meaning                                      |
 |-------------|----------------------------------------------|
 | `type`      | snapshot type, currently always `history`    |
-| `version`   | snapshot schema version, currently `1`       |
 | `writtenAt` | write time from `GLib.get_real_time()`       |
 | `items`     | sorted record array, newest/MRU first        |
 
@@ -63,6 +75,8 @@ payload values live in `payloads`; top-level fields are metadata only.
   "kind": "text",
   "mime": "text/plain;charset=utf-8",
   "bytes": 19,
+  "contentBytes": 93,
+  "contentSha256": "9fc53d370d64f5b691a76c479cf38543440fc34e5ca293c46a8dea1c605aaf0e",
   "createdAt": 1782734910223125,
   "usedAt": 1782734910223125,
   "payloads": [
@@ -82,9 +96,17 @@ payload values live in `payloads`; top-level fields are metadata only.
 | `kind`      | yes       | `text`, `rich`, `file`, `image`, or `binary`             |
 | `mime`      | yes       | primary MIME; normally `payloads[0].mime`                |
 | `bytes`     | yes       | sum of persisted payload raw byte counts                 |
+| `contentBytes` | yes       | byte length of length-framed canonical content |
+| `contentSha256` | yes       | lowercase SHA-256 of that canonical content       |
 | `createdAt` | yes       | first insert time from `GLib.get_real_time()`            |
 | `usedAt`    | yes       | MRU time from `GLib.get_real_time()`                     |
 | `payloads`  | yes       | one or more payload entries; primary payload first       |
+
+Both content-identity fields are required. `kind` is kept outside the digest and is the first
+part of the candidate key. `contentBytes` is the size of the canonical framed identity input,
+not the raw clipboard payload size (`bytes`). A candidate match still requires exact equality
+of `kind`, primary `mime`, top-level `bytes`, and every ordered payload's `mime`, `encoding`,
+`bytes`, and `value`.
 
 These fields are not persisted:
 
@@ -92,7 +114,7 @@ These fields are not persisted:
 - derived display fields: `preview`
 - old file-twin process fields: `fileTwinUriList`, `synthesizedFilePath`
 - monitor state: `_lastContent`
-- content identity fields: hash, digest, dedup key
+- runtime-only dedup index buckets and cached composite keys
 - old single-payload fields: `text`, `data`, `uri`, `encoding`
 - restore bookkeeping: `lastPasteMode` (`kind=rich` only; tracks which mode was last
   actually written so the [recent top restore shortcut](03-clipboard/README.md#recent-top-restore-shortcut)
@@ -141,6 +163,6 @@ target app config. See
 ## Load behavior
 
 Startup reads the newest available `clips-YYYYMMDD.jsonl` file and parses only the final
-snapshot line. If the line is missing, corrupt, invalid, oversized, or not schema
-`version:1`, history starts empty. Older lines are left on disk for future repair tooling;
+snapshot line. If the line is missing, corrupt, invalid, oversized, or does not match the
+current schema, history starts empty. Older lines are left on disk for future repair tooling;
 the Shell extension does not scan backwards to repair or migrate during startup.

@@ -78,7 +78,8 @@ prefix for this reason.
   `_lastContent(origin=restore, source=(cli-copy))`, write the clipboard, roll the marker
   back on failure. The history entry is added directly, so the monitor's echo drop cannot
   lose it, and text caps (`history.maxItemBytes`, `storage.textMaxBytes`) are enforced
-  before anything is written.
+  before anything is written. The new record keeps its fresh id; older exact
+  kind/MIME/payload matches are removed, so their ids become `not-found`.
 - **`Status` is the one unguarded method** - it answers even while other handlers would
   return `not-ready`, so `copy-gnome status` can show service health during load.
 

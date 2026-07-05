@@ -13,6 +13,13 @@
   after a failed read. Wrapper reads sample the current clipboard (accepted stability
   tradeoff); stale-owner/epoch consistency is a separate future optimization. Details in
   [docs/03-clipboard/capture-pipeline.md](docs/03-clipboard/capture-pipeline.md).
+- A successful history insertion keeps the new head and uses persisted
+  `kind + contentBytes + contentSha256` identity to select older candidates. Digest matches
+  are verified field-by-field before one batch removal and `maxItems` eviction. Both identity
+  fields are required in stored records; incomplete snapshots fail closed rather than entering
+  a compatibility path. It never compares older records with each other, never runs on the
+  enqueue side, and never writes the system clipboard. Details in
+  [docs/06-history-model.md](docs/06-history-model.md).
 - A bounded sweep deletes expired daily `clips-*.jsonl` files older than
   `history.maxAgeDays` (default 3). It runs only after history load: once at startup,
   periodically, and after the first successful append to a new daily file. It never runs

@@ -171,6 +171,10 @@ copy-gnome popup                            # toggle the history popup (same as 
 (`list` prints the first 8 chars). Method surface, envelope, and error codes:
 [14-ipc](14-ipc/README.md).
 
+Each successful capture/copy receives a new id. If its kind/MIME/ordered payloads exactly
+match older records, those older records are removed, so their ids immediately become
+`not-found`; scripts should resolve ids from a current `list`/`search` result.
+
 Useful config examples:
 
 ```bash

@@ -17,13 +17,15 @@ const textItem = id => ({
   kind: "text",
   mime: "text/plain;charset=utf-8",
   bytes: 5,
+  contentBytes: 76,
+  contentSha256: "e79cc3efa4f0614fba20437f0317646990b53021365116ccd404cfe421b95b57",
   createdAt: 1,
   usedAt: 1,
   payloads: [
     { mime: "text/plain;charset=utf-8", encoding: "utf8", value: "hello", bytes: 5 },
   ],
 });
-const snap = (items = []) => JSON.stringify({ type: "history", version: 1, items });
+const snap = (items = []) => JSON.stringify({ type: "history", writtenAt: 1, items });
 
 function dataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cg-clips-"));
@@ -78,6 +80,75 @@ test("inspectClipFile: valid latest line is ok with item count", () => {
     assert.equal(r.ok, true);
     assert.equal(r.exists, true);
     assert.equal(r.count, 1); // only the last line is inspected
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("inspectClipFile: a trailing newline after a multi-chunk snapshot is not an empty line", () => {
+  const dir = dataDir();
+  const f = path.join(dir, "clips-20260630.jsonl");
+  const value = "x".repeat(1024 * 1024);
+  const item = {
+    ...textItem("large"),
+    bytes: value.length,
+    payloads: [{
+      mime: "text/plain;charset=utf-8",
+      encoding: "utf8",
+      value,
+      bytes: value.length,
+    }],
+  };
+  try {
+    const line = snap([item]);
+    assert.ok(Buffer.byteLength(line) > 1024 * 1024);
+    fs.writeFileSync(f, `${line}\n`, "utf8");
+    const result = inspectClipFile(f);
+    assert.equal(result.ok, true);
+    assert.equal(result.count, 1);
+    assert.equal(result.lineBytes, Buffer.byteLength(line));
+    assert.doesNotMatch(result.message, /empty clips file/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("inspectClipFile: persisted content identity is accepted", () => {
+  const dir = dataDir();
+  const f = path.join(dir, "clips-20260630.jsonl");
+  try {
+    const item = {
+      ...textItem("indexed"),
+      contentBytes: 123,
+      contentSha256: "a".repeat(64),
+    };
+    fs.writeFileSync(f, `${snap([item])}\n`, "utf8");
+    const result = inspectClipFile(f);
+    assert.equal(result.ok, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("inspectClipFile: partial or malformed content identity is invalid", () => {
+  const dir = dataDir();
+  const f = path.join(dir, "clips-20260630.jsonl");
+  try {
+    const partial = textItem("partial");
+    delete partial.contentSha256;
+    fs.writeFileSync(f, `${snap([partial])}\n`, "utf8");
+    let result = inspectClipFile(f);
+    assert.equal(result.ok, false);
+    assert.match(result.message, /invalid content identity/);
+
+    fs.writeFileSync(f, `${snap([{
+      ...textItem("malformed"),
+      contentBytes: 123,
+      contentSha256: "A".repeat(64),
+    }])}\n`, "utf8");
+    result = inspectClipFile(f);
+    assert.equal(result.ok, false);
+    assert.match(result.message, /invalid content identity/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -138,7 +209,7 @@ test("repairLatestClip dry-run plans but does not modify the file", () => {
   const dir = dataDir();
   const f = path.join(dir, "clips-20260630.jsonl");
   const valid = snap([textItem("a")]);
-  const garbage = `{"type":"history","version":1,"items":[{"id":"c`;
+  const garbage = `{"type":"history","writtenAt":1,"items":[{"id":"c`;
   try {
     fs.writeFileSync(f, `${valid}\n${garbage}`, "utf8");
     const before = fs.readFileSync(f, "utf8");
@@ -158,7 +229,7 @@ test("repairLatestClip --yes backs up, truncates the bad line, and restores heal
   const f = path.join(dir, "clips-20260630.jsonl");
   const line1 = snap([textItem("a")]);
   const line2 = snap([textItem("b")]);
-  const garbage = `{"type":"history","version":1,"items":[{"id":"c`;
+  const garbage = `{"type":"history","writtenAt":1,"items":[{"id":"c`;
   try {
     fs.writeFileSync(f, `${line1}\n${line2}\n${garbage}`, "utf8");
     const r = repairLatestClip(dir, { yes: true });
