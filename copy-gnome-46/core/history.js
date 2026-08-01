@@ -105,6 +105,17 @@ export class History {
         this._onChange();
     }
 
+    /**
+     * Mark the current in-memory snapshot pending without changing any record. Used once at
+     * startup, right after load(), when history was recovered from an older day's file
+     * (store.recoveredFromOlderFile) so it gets a durable copy in today's file before the
+     * retention sweep can delete the file it was just recovered from.
+     */
+    persistSnapshot() {
+        log.debug('history persistSnapshot: forcing current snapshot pending (startup re-home)');
+        this._persist();
+    }
+
     trimTo(records) {
         this._replaceRecords(records);
         this._sort();

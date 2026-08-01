@@ -36,6 +36,7 @@ Gio._promisify(Gio.File.prototype, 'delete_async', 'delete_finish');
 // Internal hard cap on a single JSONL snapshot line. Fixed for now; intended to become a
 // configurable storage option later.
 const MAX_SNAPSHOT_LINE_BYTES = 64 * 1024 * 1024;
+const DAY_MICROS = 86400 * 1e6;
 const _enc = new TextEncoder();
 const _dec = new TextDecoder();
 
@@ -79,6 +80,16 @@ function clipDateFromName(name) {
     const m = /^clips-(\d{4})(\d{2})(\d{2})\.jsonl$/.exec(name);
     if (!m) return null;
     return GLib.DateTime.new_local(Number(m[1]), Number(m[2]), Number(m[3]), 0, 0, 0);
+}
+
+// Whole days between a clips filename's date and `now`, or null if the name doesn't parse.
+// Shared by sweepOldFiles() (which files are old enough to delete) and open() (whether a
+// fallback file it just recovered is already within that same deletion window).
+function clipAgeDays(name, now) {
+    const fileDay = clipDateFromName(name);
+    if (!fileDay)
+        return null;
+    return Math.floor(now.difference(fileDay) / DAY_MICROS);
 }
 
 function clipPath(dir, name) {
@@ -226,12 +237,31 @@ export class Store {
         this._degraded = false;
         this._sweeping = false;
         this._retryNewDailySweep = false;
+        this._recoveredFromOlderFile = false;
+        this._recoveredFileAgeDays = null;
+    }
+
+    // True once open() has returned a non-empty snapshot loaded from a daily file other than
+    // today's (the startup fallback in _pickStartupFileName). That file becomes a sweep
+    // candidate as soon as its age (recoveredFileAgeDays) reaches history.maxAgeDays, so the
+    // caller must give the recovered snapshot a durable copy in today's file before that
+    // happens - see extension.js's _rehomeRecoveredSnapshot() and docs/04-storage/lifecycle.md.
+    get recoveredFromOlderFile() {
+        return this._recoveredFromOlderFile;
+    }
+
+    // Age in whole days (by filename date, as of the open() call) of the file
+    // recoveredFromOlderFile refers to; null when recoveredFromOlderFile is false.
+    get recoveredFileAgeDays() {
+        return this._recoveredFileAgeDays;
     }
 
     async open() {
         ensureDir(this._dir);
         ensureDir(this._tmpDir);
 
+        this._recoveredFromOlderFile = false;
+        this._recoveredFileAgeDays = null;
         const fileName = this._pickStartupFileName();
         if (!fileName) {
             log.info(`[store]: opened 0 records from ${this._dir}`);
@@ -243,6 +273,11 @@ export class Store {
             const line = await this._readLastLineText(path);
             const records = this._parseSnapshotLine(line);
             log.info(`[store]: opened ${records.length} records from ${path}`);
+            if (records.length > 0 && fileName !== currentClipName()) {
+                this._recoveredFromOlderFile = true;
+                this._recoveredFileAgeDays = clipAgeDays(fileName, GLib.DateTime.new_now_local());
+                log.info(`[store]: recovered from an older day's file ageDays=${this._recoveredFileAgeDays} (today's file did not exist yet)`);
+            }
             return records;
         } catch (e) {
             log.warn(`[store]: clips load failed path=${path} reason=${e.message}; starting empty`);
@@ -369,6 +404,7 @@ export class Store {
         // (storage.flushIntervalSec, default 3600s) and on disable()/closeSync(). _pending just
         // holds the latest full snapshot until then; recent captures may be lost on crash.
         this._pending = { target: currentClipName(), records, gen };
+        log.debug(`[store]: pending snapshot queued target=${this._pending.target} records=${records.length} gen=${gen}`);
     }
 
     _snapshotItem(rec) {
@@ -450,10 +486,14 @@ export class Store {
     // and by closeSync() on teardown; there is no per-mutation debounce. If a flush is already in
     // progress, a concurrent call leaves _pending in place for the next periodic tick.
     async flush() {
-        if (this._closed || !this._pending)
+        if (this._closed || !this._pending) {
+            log.debug(`[store]: flush skipped reason=${this._closed ? 'closed' : 'nothing-pending'}`);
             return 'idle';
-        if (this._busy)
+        }
+        if (this._busy) {
+            log.debug('[store]: flush skipped reason=busy');
             return 'busy';
+        }
         this._busy = true;
         const batch = this._pending;
         this._pending = null;
@@ -524,18 +564,16 @@ export class Store {
         this._sweeping = true;
         try {
             const now = GLib.DateTime.new_now_local();
-            const dayMicros = 86400 * 1e6;
             for (const name of listNames(this._dir).filter(isClipFileName)) {
                 // Stop promptly if disable()/closeSync() ran mid-sweep; teardown must not keep
                 // deleting. (Also bounds any overlapping sweep.)
                 if (this._closed)
                     return;
-                const fileDay = clipDateFromName(name);
-                if (!fileDay) {
+                const ageDays = clipAgeDays(name, now);
+                if (ageDays === null) {
                     log.warn(`[store]: cleanup skip unparsable name=${name}`);
                     continue;
                 }
-                const ageDays = Math.floor(now.difference(fileDay) / dayMicros);
                 if (ageDays <= maxAgeDays)
                     continue;
                 try {

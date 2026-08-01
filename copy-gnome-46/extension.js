@@ -179,6 +179,37 @@ export default class CopyGnomeExtension extends Extension {
             });
     }
 
+    // If startup recovered non-empty history from an older day's file that has already
+    // reached history.maxAgeDays (today's file didn't exist yet, see
+    // Store._pickStartupFileName), that file is due to be deleted by the very next retention
+    // sweep. Give the recovered snapshot a durable copy in today's file first, so the sweep
+    // can never be the only thing standing between "loaded into memory" and "gone for good" -
+    // see docs/04-storage/lifecycle.md. No-op when startup used today's own file, found
+    // nothing, failed to load, or the recovered file is younger than maxAgeDays (an ordinary
+    // daily reboot, which stays the lazy, flush-driven day switch docs/04-storage describes -
+    // a later real copy will re-home it same as always). Fail-closed: a failed re-home is
+    // logged and does not throw; called from _startRuntime() without blocking feature bring-up
+    // (see the retention-sweep block below), so a stuck write here cannot delay the monitor,
+    // popup, indicator, keybindings, or IPC coming up.
+    async _rehomeRecoveredSnapshot() {
+        if (!this._store?.recoveredFromOlderFile)
+            return;
+        const maxAgeDays = this._config?.history?.maxAgeDays ?? 0;
+        const ageDays = this._store?.recoveredFileAgeDays;
+        if (!(maxAgeDays > 0) || !Number.isInteger(ageDays) || ageDays < maxAgeDays) {
+            log.debug(`[store]: recovered history ageDays=${ageDays} is younger than maxAgeDays=${maxAgeDays}; leaving it for a later copy to re-home`);
+            return;
+        }
+        log.info(`[store]: recovered history ageDays=${ageDays} has reached maxAgeDays=${maxAgeDays}; re-homing to today's file before the sweep runs`);
+        this._history?.persistSnapshot();
+        try {
+            const status = await this._store?.flush() ?? 'idle';
+            log.info(`[store]: recovered history re-homed to today's file status=${status}`);
+        } catch (e) {
+            log.warn(`[store]: recovered history re-home failed: ${e.message}`);
+        }
+    }
+
     _startRuntime() {
         if (!this._enabled || !this._history || this._monitor)
             return;
@@ -234,13 +265,25 @@ export default class CopyGnomeExtension extends Extension {
         // runs periodically, and also runs after a successful first append to a new daily file.
         // It never runs from disable()/teardown. The sweep is fail-closed and never touches the
         // in-memory history; deleting even the just-loaded old file is safe because memory is
-        // the session source of truth and the next copy re-homes the snapshot to today's file.
+        // the session source of truth and _rehomeRecoveredSnapshot() (below) already re-homes a
+        // recovered snapshot to today's file before either the startup or the first periodic
+        // sweep can run against it - both wait on the same _startupRehomeDone promise, so a
+        // short-interval cleanupIntervalSec cannot race a still-in-flight re-home. Feature
+        // bring-up above (monitor/popup/indicator/keybindings) does not wait for any of this.
         const maxAgeDays = this._config.history.maxAgeDays;
         if (maxAgeDays > 0) {
-            this._sweepOldFiles('startup');
+            this._startupRehomeDone = this._rehomeRecoveredSnapshot()
+                .catch(e => log.warn(`[store]: recovered history re-home failed: ${e.message}`))
+                .finally(() => {
+                    if (this._enabled)
+                        this._sweepOldFiles('startup');
+                });
             const sweepSec = Math.max(15, this._config.history.cleanupIntervalSec);
             this._cleanupTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sweepSec, () => {
-                this._sweepOldFiles('timer');
+                this._startupRehomeDone.finally(() => {
+                    if (this._enabled)
+                        this._sweepOldFiles('timer');
+                });
                 return GLib.SOURCE_CONTINUE;
             });
         }
@@ -352,6 +395,7 @@ export default class CopyGnomeExtension extends Extension {
         this._settings = null;
         this._config = null;
         this._notificationSource = null;
+        this._startupRehomeDone = null;
 
         log.info('disabled');
     }

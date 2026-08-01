@@ -25,11 +25,23 @@ line is the only durable history view after restart; if it is invalid, startup b
 7. Never move, copy, rewrite, or truncate old clip files during startup.
 8. Opening/creating the current day file is allowed only so future writes can append.
 9. Do not repair, migrate, rewrite, or scan old schema lines during startup.
+10. If step 2 had to fall back to an older file, that file's age (by filename date) is
+    compared against `history.maxAgeDays`. Once it has already reached that age - the same
+    file the very next retention sweep would otherwise delete - its snapshot is re-persisted
+    as one line in today's file, the same append path a normal flush uses, before that sweep
+    runs. A younger fallback file (an ordinary daily reboot) is left alone: this is a no-op
+    when step 1 already found today's file, the recovered snapshot is empty/invalid, or the
+    fallback file has not yet reached `maxAgeDays` - a later real copy re-homes it same as
+    always (see [Day Switching](#day-switching) below). This re-home runs in the background;
+    it does not delay the monitor, popup, indicator, keybindings, or IPC coming up, only the
+    sweep waits for it; see [cleanup-and-limits](cleanup-and-limits.md#cleanup).
 
 
 ## Day Switching
 
-Day switching is just filename selection for future appends:
+Day switching is just filename selection for future appends, with one startup exception -
+step 10 above re-homes a fallback file immediately, without waiting for a flush, once that
+file has reached `history.maxAgeDays`:
 
 - Each flush appends a full snapshot to the current day's file.
 - When the wall clock moves into a new day, new snapshots naturally target

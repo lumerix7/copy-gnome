@@ -10,12 +10,19 @@ Expired-file retention runs on the normal Shell path as a bounded, fail-closed s
 - `history.maxAgeDays` (default 3, 0 = disabled): delete whole daily `clips-*.jsonl` files
   whose filename date is strictly older than N days.
 - `history.cleanupIntervalSec` (default 86400, range 15..864000): periodic sweep interval.
-- The sweep starts only after `store.open()` + history load. It runs once at startup,
-  periodically, and after the first successful append to a newly-created daily clips file;
-  it never runs from `disable()`/teardown. Memory is the session source of truth, so
-  deleting even the just-loaded old file is safe; the next copy re-homes the full snapshot
-  to today's file.
-- If that new-file trigger races an in-progress sweep, the store schedules one follow-up
+- The sweep starts only after `store.open()` + history load. Both the startup sweep and the
+  first periodic sweep wait on one background check first (`extension.js`'s
+  `_rehomeRecoveredSnapshot()` / `_startupRehomeDone`, see [lifecycle](lifecycle.md#startup)):
+  if startup recovered history from an older file that has already reached
+  `history.maxAgeDays`, that snapshot is re-persisted to today's file before either sweep can
+  run against it, so deleting the now-superseded older file is always safe without depending
+  on a later copy actually happening first. A fallback file younger than `maxAgeDays` is left
+  alone - it is not sweep-eligible yet, so no extra write happens on an ordinary daily reboot.
+  This check runs in the background: it never delays the monitor, popup, indicator,
+  keybindings, or IPC, which all come up immediately regardless of its outcome.
+- After that, the sweep runs once at startup, periodically, and after the first successful
+  append to a newly-created daily clips file; it never runs from `disable()`/teardown.
+- If the new-daily-file trigger races an in-progress sweep, the store schedules one follow-up
   sweep. Startup and periodic overlap remain no-ops, so a slow sweep cannot be kept alive by
   the periodic timer.
 - It deletes whole files by filename date only. It never parses, rewrites, truncates,

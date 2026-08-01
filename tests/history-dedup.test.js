@@ -267,6 +267,156 @@ async function testStoreRoundTripsContentIdentity() {
     }
 }
 
+function todayClipName() {
+    return `clips-${GLib.DateTime.new_now_local().format('%Y%m%d')}.jsonl`;
+}
+
+function pastClipName(daysAgo) {
+    const dt = GLib.DateTime.new_now_local().add_days(-daysAgo);
+    return `clips-${dt.format('%Y%m%d')}.jsonl`;
+}
+
+function writeSnapshotFile(path, records) {
+    const line = JSON.stringify({ type: 'history', writtenAt: GLib.get_real_time(), items: records });
+    GLib.file_set_contents(path, `${line}\n`);
+}
+
+// Mirrors extension.js's _rehomeRecoveredSnapshot() gating condition - keep in sync: only
+// re-home a cross-day recovery once its age has actually reached maxAgeDays, i.e. the sweep
+// that follows would otherwise delete it. A younger fallback file is left for a later real
+// copy to re-home, same as an ordinary daily reboot.
+function shouldRehome(store, maxAgeDays) {
+    return store.recoveredFromOlderFile && maxAgeDays > 0 &&
+        Number.isInteger(store.recoveredFileAgeDays) && store.recoveredFileAgeDays >= maxAgeDays;
+}
+
+async function testRecoveredSnapshotIsRehomedBeforeSweep() {
+    const dataDir = GLib.dir_make_tmp('copy-gnome-store-rehome-test-XXXXXX');
+    try {
+        const seed = harness([]).history.add(textCapture('old-day', 'still needed'));
+        const oldName = pastClipName(9);
+        writeSnapshotFile(GLib.build_filenamev([dataDir, oldName]), [seed]);
+
+        const store = new Store({ dataDir });
+        const records = await store.open();
+        assert(records.length === 1, 'startup must recover the record from the older file');
+        assert(store.recoveredFromOlderFile === true,
+            'store must flag a cross-day recovery so the caller considers re-homing it');
+        assert(store.recoveredFileAgeDays === 9, 'recovered file age must be exposed in whole days');
+        assert(shouldRehome(store, 3) === true,
+            'a 9-day-old file with maxAgeDays=3 is already sweep-eligible and must be re-homed');
+
+        // Mirrors extension.js's _rehomeRecoveredSnapshot(): persist once, before any sweep.
+        const history = new History({ opts: { maxItems: 10 }, store, onChange: () => {} });
+        history.load(records);
+        history.persistSnapshot();
+        assert(await store.flush() === 'saved', 'recovered snapshot must flush to today\'s file');
+
+        const todayPath = GLib.build_filenamev([dataDir, todayClipName()]);
+        assert(Gio.File.new_for_path(todayPath).query_exists(null),
+            'today\'s file must exist before the sweep runs');
+
+        await store.sweepOldFiles(3);
+        const oldPath = GLib.build_filenamev([dataDir, oldName]);
+        assert(!Gio.File.new_for_path(oldPath).query_exists(null),
+            'the now-superseded older file must still be swept');
+
+        const reopened = new Store({ dataDir });
+        const survivors = await reopened.open();
+        assert(survivors.length === 1 && survivors[0].contentSha256 === seed.contentSha256,
+            'the record must survive the sweep because it was re-homed first');
+        assert(reopened.recoveredFromOlderFile === false,
+            'a same-day reload must not be flagged as a cross-day recovery');
+        reopened.closeSync();
+        store.closeSync();
+    } finally {
+        removeTree(dataDir);
+    }
+}
+
+async function testSameDayLoadIsNotRehomed() {
+    const dataDir = GLib.dir_make_tmp('copy-gnome-store-noop-rehome-test-XXXXXX');
+    try {
+        const seed = harness([]).history.add(textCapture('today', 'already home'));
+        writeSnapshotFile(GLib.build_filenamev([dataDir, todayClipName()]), [seed]);
+
+        const store = new Store({ dataDir });
+        const records = await store.open();
+        assert(records.length === 1, 'startup must load today\'s own file');
+        assert(store.recoveredFromOlderFile === false,
+            'loading today\'s own file must never be flagged as a cross-day recovery');
+        assert(store.recoveredFileAgeDays === null,
+            'recoveredFileAgeDays must be null when there was no cross-day recovery');
+
+        const history = new History({ opts: { maxItems: 10 }, store, onChange: () => {} });
+        history.load(records);
+        assert(await store.flush() === 'idle',
+            'a same-day load must not queue a redundant re-home snapshot');
+        store.closeSync();
+    } finally {
+        removeTree(dataDir);
+    }
+}
+
+async function testYoungFallbackFileIsNotRehomed() {
+    const dataDir = GLib.dir_make_tmp('copy-gnome-store-young-rehome-test-XXXXXX');
+    try {
+        const seed = harness([]).history.add(textCapture('yesterday', 'ordinary daily reboot'));
+        writeSnapshotFile(GLib.build_filenamev([dataDir, pastClipName(1)]), [seed]);
+
+        const store = new Store({ dataDir });
+        const records = await store.open();
+        assert(records.length === 1, 'startup must recover the record from yesterday\'s file');
+        assert(store.recoveredFromOlderFile === true,
+            'loading yesterday\'s file is still a cross-day recovery mechanically');
+        assert(store.recoveredFileAgeDays === 1, 'the fallback file must be exactly 1 day old');
+        assert(shouldRehome(store, 3) === false,
+            'a 1-day-old file is not yet sweep-eligible under the default maxAgeDays=3 and ' +
+            'must not force an extra write on an ordinary daily reboot');
+
+        const history = new History({ opts: { maxItems: 10 }, store, onChange: () => {} });
+        history.load(records);
+        // shouldRehome is false, so extension.js never calls persistSnapshot() here.
+        assert(await store.flush() === 'idle',
+            'an ordinary (not yet sweep-eligible) cross-day recovery must not queue a write');
+        store.closeSync();
+    } finally {
+        removeTree(dataDir);
+    }
+}
+
+async function testFallbackFileExactlyAtMaxAgeIsRehomed() {
+    const dataDir = GLib.dir_make_tmp('copy-gnome-store-boundary-rehome-test-XXXXXX');
+    try {
+        const seed = harness([]).history.add(textCapture('boundary-day', 'right at the edge'));
+        const oldName = pastClipName(3);
+        writeSnapshotFile(GLib.build_filenamev([dataDir, oldName]), [seed]);
+
+        const store = new Store({ dataDir });
+        const records = await store.open();
+        assert(store.recoveredFileAgeDays === 3, 'the fallback file must be exactly 3 days old');
+        assert(shouldRehome(store, 3) === true,
+            'a file exactly at maxAgeDays must be re-homed one day before the sweep would ' +
+            'otherwise delete it, closing the race between open() and the sweep that follows');
+
+        const history = new History({ opts: { maxItems: 10 }, store, onChange: () => {} });
+        history.load(records);
+        history.persistSnapshot();
+        assert(await store.flush() === 'saved', 'recovered snapshot must flush to today\'s file');
+
+        // The sweep itself only deletes when ageDays > maxAgeDays (strictly older), so a file
+        // exactly at the boundary is not deleted this pass - the re-home above does not depend
+        // on that, since the data is already safe in today's file either way.
+        await store.sweepOldFiles(3);
+        const oldPath = GLib.build_filenamev([dataDir, oldName]);
+        assert(Gio.File.new_for_path(oldPath).query_exists(null),
+            'a file exactly at maxAgeDays is not deleted by this sweep pass yet');
+        store.closeSync();
+    } finally {
+        removeTree(dataDir);
+    }
+}
+
 async function testStoreRejectsMissingContentIdentity() {
     const dataDir = GLib.dir_make_tmp('copy-gnome-store-invalid-test-XXXXXX');
     try {
@@ -298,4 +448,8 @@ testCanonicalContentIdentityIsStable();
 testDigestCandidateStillRequiresExactMatch();
 await testStoreRoundTripsContentIdentity();
 await testStoreRejectsMissingContentIdentity();
+await testRecoveredSnapshotIsRehomedBeforeSweep();
+await testSameDayLoadIsNotRehomed();
+await testYoungFallbackFileIsNotRehomed();
+await testFallbackFileExactlyAtMaxAgeIsRehomed();
 console.log('history dedup tests passed');

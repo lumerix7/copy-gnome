@@ -23,8 +23,13 @@
 - A bounded sweep deletes expired daily `clips-*.jsonl` files older than
   `history.maxAgeDays` (default 3). It runs only after history load: once at startup,
   periodically, and after the first successful append to a new daily file. It never runs
-  from `disable()`; it deletes whole files by date and never rewrites contents. Details in
-  [docs/04-storage](docs/04-storage/README.md).
+  from `disable()`; it deletes whole files by date and never rewrites contents. If startup
+  recovered non-empty history from an older fallback file that has already reached
+  `maxAgeDays`, that snapshot is re-persisted to today's file first, in the background,
+  before either the startup or the first periodic sweep can run against it; a fallback file
+  younger than `maxAgeDays` (an ordinary daily reboot) is left for a later real copy to
+  re-home instead. This re-home never blocks the monitor, popup, indicator, keybindings, or
+  IPC coming up. Details in [docs/04-storage](docs/04-storage/README.md).
 - The DBus control service (`core/ipc.js`, consumed by the CLI history commands) starts
   only at the end of runtime start (after history load) and is unexported in `disable()`.
   IPC handlers never throw into the Shell: the transport wraps every call and errors
