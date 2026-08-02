@@ -111,6 +111,12 @@ function normalizeUriListForRestore(uriList) {
         .join('\n');
 }
 
+// Explicit restore modes accepted by IPC `Use`, per record kind; other kinds take none.
+const USE_MODES_BY_KIND = {
+    rich: ['rich', 'plain'],
+    file: ['path', 'file'],
+};
+
 function filePathText(uriList) {
     const paths = [];
     for (const line of uriList.split('\n').map(l => l.trim()).filter(Boolean)) {
@@ -615,6 +621,8 @@ export default class CopyGnomeExtension extends Extension {
             // Usually restore writes to the real system clipboard first. The recent row-1
             // shortcut skips only that write; validation, MRU touch, and paste continue.
             let wrote = false;
+            // Resolved paste mode for the info line (rich/file only; other kinds have one mode).
+            let modeLog = '';
             // Self-write filtering lives in the monitor: record what we are about to write
             // (origin 'restore', sourceKind 'memory'), then write. The drain side drops the
             // memory echo by matching this type+value. Back up first so a failed write rolls
@@ -628,9 +636,12 @@ export default class CopyGnomeExtension extends Extension {
             // (or no) target for the new mode. rec.lastPasteMode is only set after a real
             // write, so the first restore of a rich record always writes for real even inside
             // the recent-top window; only a second restore in the same mode can skip.
-            const skipWrite = (type, pasteMode = null) => {
+            // `unconfirmedOk` lets a never-restored file record skip on automatic Paste only:
+            // that keeps the pre-mode skip behavior (and a file-manager cut) on the source app's
+            // own clipboard. A forced mode (Paste path, CLI --mode) never relies on it and writes for real.
+            const skipWrite = (type, pasteMode = null, unconfirmedOk = false) => {
                 const modeOk = pasteMode == null ||
-                    (rec.lastPasteMode != null && rec.lastPasteMode === pasteMode);
+                    (rec.lastPasteMode == null ? unconfirmedOk : rec.lastPasteMode === pasteMode);
                 const skip = !!recentTop && modeOk;
                 if (skip) {
                     log.debug(`[restore]: clipboard write skipped recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top row=${recentTop.rowNumber} ageMs=${recentTop.ageMs} windowSec=${recentTop.windowSec}`);
@@ -647,6 +658,7 @@ export default class CopyGnomeExtension extends Extension {
                     return false;
                 }
                 const mode = this._resolveRichTextMode(targetWindow, opts?.mode);
+                modeLog = ` mode=${mode.mode} reason=${mode.reason}`;
                 if (mode.mode === 'rich') {
                     if (skipWrite('rich', 'rich'))
                         wrote = true;
@@ -701,19 +713,31 @@ export default class CopyGnomeExtension extends Extension {
                     return false;
                 }
                 const restoreUri = normalizeUriListForRestore(payload.value);
-                const wmClass = this._targetWmClass(targetWindow);
-                const restoreFileUri = this._shouldRestoreFileUri(wmClass);
-                const mode = restoreFileUri ? 'file' : 'path';
-                const fileApps = this._config?.ui?.fileApps ?? [];
-                const fileMatch = this._matchingConfigSubstring(wmClass, fileApps);
-                log.debug(`[restore]: file target recordId=${rec.id} wm_class="${debugValue(wmClass)}" normalized="${debugValue(String(wmClass ?? '').toLowerCase())}" mode=${mode} match=${fileMatch || '(none)'} fileApps=${fileApps.join(',') || '(none)'}`);
-                if (restoreFileUri) {
-                    if (skipWrite('file'))
+                const explicitMode = opts?.mode === 'file' || opts?.mode === 'path' ? opts.mode : null;
+                let mode, reason;
+                if (explicitMode) {
+                    mode = explicitMode;
+                    reason = 'explicit';
+                    log.debug(`[restore]: file target recordId=${rec.id} mode=${mode} reason=${reason}`);
+                } else {
+                    const wmClass = this._targetWmClass(targetWindow);
+                    mode = this._shouldRestoreFileUri(wmClass) ? 'file' : 'path';
+                    reason = 'fileApps';
+                    const fileApps = this._config?.ui?.fileApps ?? [];
+                    const fileMatch = this._matchingConfigSubstring(wmClass, fileApps);
+                    log.debug(`[restore]: file target recordId=${rec.id} wm_class="${debugValue(wmClass)}" normalized="${debugValue(String(wmClass ?? '').toLowerCase())}" mode=${mode} reason=${reason} match=${fileMatch || '(none)'} fileApps=${fileApps.join(',') || '(none)'}`);
+                }
+                modeLog = ` mode=${mode} reason=${reason}`;
+                const unconfirmedOk = !explicitMode;
+                if (mode === 'file') {
+                    if (skipWrite('file', 'file', unconfirmedOk))
                         wrote = true;
                     else {
                         markSelfWrite('file', restoreUri);
                         const payload = gnomeCopiedFilesPayload(restoreUri);
                         wrote = Clipboard.setContent('x-special/gnome-copied-files', encodeUtf8(payload));
+                        if (wrote)
+                            rec.lastPasteMode = 'file';
                         log.debug(`[restore]: file clipboard write mode=file mime=x-special/gnome-copied-files action=copy recordId=${rec.id} uriCount=${uriListCount(restoreUri)} uriList="${debugValue(restoreUri)}"`);
                     }
                 } else {
@@ -722,11 +746,13 @@ export default class CopyGnomeExtension extends Extension {
                         log.warn(`[restore]: file restore skipped recordId=${rec.id} reason=no-path-text uriList="${debugValue(restoreUri)}"`);
                         return false;
                     }
-                    if (skipWrite('text'))
+                    if (skipWrite('text', 'path', unconfirmedOk))
                         wrote = true;
                     else {
                         markSelfWrite('text', pathText);
                         wrote = Clipboard.setText(pathText);
+                        if (wrote)
+                            rec.lastPasteMode = 'path';
                         log.debug(`[restore]: file clipboard write mode=path recordId=${rec.id} bytes=${byteLength(pathText)} uriCount=${uriListCount(restoreUri)} value="${debugValue(pathText)}"`);
                     }
                 }
@@ -772,7 +798,7 @@ export default class CopyGnomeExtension extends Extension {
                 return false;
             // Move the used entry to the front (MRU).
             this._history.touch(rec);
-            log.info(`[restore]: restored recordId=${rec.id} kind=${rec.kind} bytes=${rec.bytes}`);
+            log.info(`[restore]: restored recordId=${rec.id} kind=${rec.kind} bytes=${rec.bytes}${modeLog}`);
 
             // Optionally paste into the focused window after focus returns.
             if (!this._config.ui.autoPaste)
@@ -1140,7 +1166,11 @@ export default class CopyGnomeExtension extends Extension {
         const { rec, error } = this._ipcFind(id);
         if (error)
             return error;
-        const explicitMode = mode === 'rich' || mode === 'plain' ? mode : null;
+        const explicitMode = mode ? String(mode) : null;
+        if (explicitMode && !(USE_MODES_BY_KIND[rec.kind] ?? []).includes(explicitMode)) {
+            log.debug(`[ipc]: Use rejected recordId=${rec.id} kind=${rec.kind} mode=${explicitMode} reason=mode-kind-mismatch`);
+            return { ok: false, code: 'bad-args', error: `mode ${explicitMode} does not apply to kind=${rec.kind}` };
+        }
         const ok = await this._restore(rec, null, { autoPaste: false, mode: explicitMode });
         if (!ok)
             return { ok: false, code: 'restore-failed', error: 'restore failed; check the journal for [restore] lines' };

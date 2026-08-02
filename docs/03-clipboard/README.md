@@ -3,7 +3,7 @@
 ## Reading Order
 
 | Doc                                     | Topic                                                      |
-|-----------------------------------------|------------------------------------------------------------|
+| --------------------------------------- | ---------------------------------------------------------- |
 | [README](README.md)                     | Monitoring, MIME priority, write-back, auto-paste, privacy |
 | [capture-pipeline](capture-pipeline.md) | Restore/enqueue/drain model, `_lastContent`, drop reasons  |
 | [file-twin-design](file-twin-design.md) | GNOME 50 file-copy capture/restore and memory path twins   |
@@ -117,9 +117,11 @@ cb.set_content(St.ClipboardType.CLIPBOARD, mimetype, bytes);   // or set_text() 
 
 For file entries, file-target apps receive **`x-special/gnome-copied-files`** with a
 non-destructive `copy\n<uri-list>` payload. Other apps receive decoded `text/plain` path
-text. Offering `x-special/gnome-copied-files`, `text/uri-list`, and `text/plain` together
-requires a multi-mime `Meta.SelectionSource` (`St.Clipboard.set_content` sets only one mime
-and replaces on each call). That remains a planned enhancement.
+text. The row menu's `Paste path` forces path text, and `copy-gnome use --mode path|file`
+forces either mode, regardless of `ui.fileApps`. Offering `x-special/gnome-copied-files`,
+`text/uri-list`, and `text/plain` together requires a multi-mime `Meta.SelectionSource`
+(`St.Clipboard.set_content` sets only one mime and replaces on each call). That remains a
+planned enhancement.
 
 
 ### Recent top restore shortcut
@@ -141,6 +143,15 @@ write is single-MIME, so skipping it when the mode changed would leave the clipb
 offering the wrong (or no) target for the new mode. The very first restore of a rich record
 always writes for real, even inside the window, since no prior mode is confirmed yet; only a
 later restore of the same row in the same mode can skip.
+
+`kind=file` records use the same gate with modes `file`/`path`, with one difference for
+automatic `Paste`: a record never restored yet (no `lastPasteMode`) may still skip, as it
+did before explicit file modes existed. The clipboard then still holds the source app's own
+selection, which keeps a file-manager cut (`cut` action) intact; whether that source also
+offers path text depends on the source app. Forced modes (`Paste path`,
+`copy-gnome use --mode path|file`) never skip on an unconfirmed mode, so they always write
+the requested single-MIME payload the first time. Once copy-gnome has written a file or
+path payload, a mode switch writes for real.
 
 
 ## Auto-paste (optional)

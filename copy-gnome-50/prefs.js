@@ -545,7 +545,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             description: 'Paste keys are matched by focused window wm_class.',
         });
         paste.add(this._listRow('fileApps', 'File-target apps',
-            'wm_class substrings that receive copied files as text/uri-list; others receive paths.',
+            'wm_class substrings that receive copied files as a file copy; others receive paths.',
             'ui'));
         paste.add(this._listRow('richTextApps', 'Rich-text apps',
             'wm_class substrings that receive HTML when restoring rich-text records.',

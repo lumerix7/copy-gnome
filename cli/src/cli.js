@@ -22,6 +22,8 @@ import { commandLine, resultText, run } from "./lib/shell.js";
 import { runDoctor } from "./lib/doctor.js";
 import { collectStatus } from "./lib/status.js";
 
+const USE_MODES = ["rich", "plain", "path", "file"];
+
 export async function main(argv) {
   const completion = completionShellFromArgv(argv);
   if (completion) {
@@ -220,12 +222,12 @@ export function buildProgram(deps = {}) {
   program.command("use")
     .description("Restore an entry to the clipboard and move it to the front")
     .argument("<id>", "entry id (a unique prefix of 4+ chars works)")
-    .option("--mode <mode>", "rich entries only: paste mode, rich or plain")
+    .option("--mode <mode>", "paste mode: rich or plain (rich entries), path or file (file entries)")
     .option("--json", "print JSON")
     .action((id, opts) => {
       const mode = opts.mode ?? "";
-      if (mode && mode !== "rich" && mode !== "plain") {
-        error(`invalid --mode: ${mode} (expected rich or plain)`);
+      if (mode && !USE_MODES.includes(mode)) {
+        error(`invalid --mode: ${mode} (expected ${USE_MODES.join(", ")})`);
         process.exitCode = 2;
         return;
       }

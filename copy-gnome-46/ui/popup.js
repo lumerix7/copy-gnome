@@ -814,6 +814,8 @@ export class Popup {
                 () => this._saveItemAs(rec)));
         }
         if (rec.kind === 'file') {
+            menu.add_child(this._itemMenuButton('Paste path',
+                () => this._activate(rec, { mode: 'path' })));
             menu.add_child(this._itemMenuButton('Show in Files',
                 () => this._revealItem(rec)));
         }

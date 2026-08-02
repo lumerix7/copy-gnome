@@ -43,8 +43,9 @@ ui:
   skipClipboardWriteForRecentTopSec: 3
                                   # 0 disables. If row 1 was updated within this many
                                   # seconds, restore/paste it without rewriting clipboard.
-  fileApps:                       # lower-case wm_class substrings that receive copied
-    - org.gnome.nautilus          # files as text/uri-list; others receive path text
+  fileApps:                       # lower-case wm_class substrings that receive copied files
+    - org.gnome.nautilus          # as a file copy (x-special/gnome-copied-files); others
+                                  # receive path text
   richTextApps:                   # rich-text records restore with primary rich MIME for these apps
     - libreoffice
     - soffice

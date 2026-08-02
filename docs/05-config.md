@@ -102,7 +102,8 @@ ui:
                                     # 0 disables. If row 1 was updated within this many
                                     # seconds, restore/paste it without rewriting clipboard.
   fileApps: ["org.gnome.nautilus"]  # lower-case wm_class substrings that receive file
-                                    # records as text/uri-list; all others receive path text
+                                    # records as a file copy (x-special/gnome-copied-files);
+                                    # all others receive path text
   richTextApps: [libreoffice, soffice]
                                     # lower-case wm_class substrings that receive rich MIME
                                     # for kind=rich records

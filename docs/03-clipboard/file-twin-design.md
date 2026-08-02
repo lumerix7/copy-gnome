@@ -46,6 +46,9 @@ Restore writes exactly one clipboard MIME for a file record:
 `ui.fileApps` defaults to `["org.gnome.nautilus"]`, so Nautilus receives the GNOME file-copy
 MIME; other apps receive path text unless the user opts them into file-target behavior.
 
+An explicit mode skips the `ui.fileApps` match: the row menu's `Paste path` always writes
+path text, and `copy-gnome use <id> --mode path|file` forces either write.
+
 
 ## Memory path twins
 

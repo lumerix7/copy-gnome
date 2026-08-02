@@ -168,6 +168,12 @@ test("use validates mode before calling Use", async () => {
   });
   assert.deepEqual(good.calls[0], { method: "Use", args: ["abc1", "plain"], opts: {} });
   assert.match(good.stdout, /restored abc1 \(rich\)/);
+
+  const path = await runCli(["use", "file1", "--mode", "path"], {
+    replies: { Use: { ok: true, id: "file1", kind: "file" } },
+  });
+  assert.deepEqual(path.calls[0], { method: "Use", args: ["file1", "path"], opts: {} });
+  assert.match(path.stdout, /restored file1 \(file\)/);
 });
 
 test("copy sends joined arguments as CopyText", async () => {

@@ -21,8 +21,9 @@ standalone clipboard managers can't monitor the clipboard).
   - right-click a row for the item menu; all rows except copied files offer **Save as**
     (portal save dialog, defaults to Downloads/Documents/home with name
     `clip-<kind>-YYYYMMDD_HHMMSS.<ext>` and a `Show in Files` save notification),
-    copied-file rows offer **Show in Files** (reveal in the session default file manager; missing
-    files show a hint instead of a file-manager error),
+    copied-file rows offer **Paste path** (force path text regardless of `ui.fileApps`) and
+    **Show in Files** (reveal in the session default file manager; missing files show a hint
+    instead of a file-manager error),
   - every paste restores the entry, moves it to front, and (default) injects Ctrl+V
     into the focused window; recent row-1 restores can skip only the system clipboard
     rewrite for a short configured window.

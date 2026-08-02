@@ -41,8 +41,9 @@ export const DEFAULTS = {
         autoPasteDelayMs: 220,
         pasteRestoresFocus: true,
         skipClipboardWriteForRecentTopSec: 3,
-        // wm_class substrings that should receive copied files as text/uri-list.
-        // All other apps receive the decoded file path as text/plain.
+        // wm_class substrings that should receive copied files as a file copy
+        // (x-special/gnome-copied-files). All other apps receive the decoded file path
+        // as text/plain.
         fileApps: ['org.gnome.nautilus'],
         // Rich-text records default to plain restore. Matching richTextApps receive the primary
         // rich MIME; matching plainTextApps always receive text/plain and win over richTextApps.

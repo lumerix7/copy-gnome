@@ -31,7 +31,7 @@ copy-gnome paths [--json]
 copy-gnome list [--limit N] [--json]
 copy-gnome search <query> [--limit N] [--json]
 copy-gnome get <id> [--raw] [--json]
-copy-gnome use <id> [--mode rich|plain] [--json]
+copy-gnome use <id> [--mode rich|plain|path|file] [--json]
 copy-gnome copy [text | -] [--json]
 copy-gnome paste [--json]
 copy-gnome rm <id> [--json]
@@ -92,12 +92,12 @@ channel into the extension. The implemented transport is DBus; the extension-sid
 still goes through a small `IpcTransport` boundary so the transport can be replaced later
 without changing the handler semantics or CLI-visible envelope.
 
-| | **DBus** (current default) | **Unix socket** |
-|---|---|---|
-| Setup | register a bus name after runtime start | Future runtime socket path TBD; do not create `$BASE/state` in the Shell path |
-| Tooling | `gdbus`/`busctl` work for free; introspectable | none free - custom line/JSON protocol |
-| Deps | session bus | none; fully self-contained |
-| Cost | bus name + boilerplate | manual message framing |
+|         | **DBus** (current default)                     | **Unix socket**                                                               |
+| ------- | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| Setup   | register a bus name after runtime start        | Future runtime socket path TBD; do not create `$BASE/state` in the Shell path |
+| Tooling | `gdbus`/`busctl` work for free; introspectable | none free - custom line/JSON protocol                                         |
+| Deps    | session bus                                    | none; fully self-contained                                                    |
+| Cost    | bus name + boilerplate                         | manual message framing                                                        |
 
 > Note on "输入法没用 DBus 了": modern IMEs moved to the **Wayland `text-input`
 > protocol** for *input events* - a different plane from *control IPC*. (IBus/Fcitx5
@@ -157,7 +157,10 @@ copy-gnome list [--limit N] [--json]        # recent entries (number, kind, size
 copy-gnome get <id> [--raw]                 # print one entry's content to stdout
 copy-gnome copy [text | -]                  # set clipboard from arg or stdin  → new entry
 copy-gnome paste                            # print current clipboard text to stdout
-copy-gnome use <id> [--mode rich|plain]     # restore entry to clipboard (move-to-front, no auto-paste)
+copy-gnome use <id> [--mode rich|plain|path|file]
+                                            # restore entry to clipboard (move-to-front, no auto-paste);
+                                            # rich|plain for rich entries, path|file for file entries
+                                            # (a mode for another kind is rejected)
 copy-gnome search <query> [--limit N] [--json]
 copy-gnome rm <id> | copy-gnome clear --yes
 copy-gnome status                           # extension state + live service section
@@ -282,7 +285,7 @@ Live service checks are intentionally outside `doctor`:
 Each check returns one of:
 
 | Severity | Meaning                                               |
-|----------|-------------------------------------------------------|
+| -------- | ----------------------------------------------------- |
 | `ok`     | Expected state.                                       |
 | `info`   | Useful context, not a problem.                        |
 | `warn`   | Suspicious or risky, but not known broken.            |

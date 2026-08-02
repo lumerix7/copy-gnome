@@ -66,7 +66,7 @@ export const COMMANDS = [
     name: "use",
     options: ["--mode", "--json", "-h", "--help"],
     values: {
-      "--mode": { kind: "choice", words: ["rich", "plain"] },
+      "--mode": { kind: "choice", words: ["rich", "plain", "path", "file"] },
     },
   },
   {

@@ -52,11 +52,11 @@ single item append.
 }
 ```
 
-| field       | meaning                                      |
-|-------------|----------------------------------------------|
-| `type`      | snapshot type, currently always `history`    |
-| `writtenAt` | write time from `GLib.get_real_time()`       |
-| `items`     | sorted record array, newest/MRU first        |
+| field       | meaning                                   |
+| ----------- | ----------------------------------------- |
+| `type`      | snapshot type, currently always `history` |
+| `writtenAt` | write time from `GLib.get_real_time()`    |
+| `items`     | sorted record array, newest/MRU first     |
 
 The store appends the newest pending snapshot once per `storage.flushIntervalSec`
 (default 3600s); there is no per-mutation write. If a snapshot line would exceed the
@@ -90,17 +90,17 @@ payload values live in `payloads`; top-level fields are metadata only.
 }
 ```
 
-| field       | persisted | meaning                                                  |
-|-------------|-----------|----------------------------------------------------------|
-| `id`        | yes       | record uuid; monitor capture id is reused when available |
-| `kind`      | yes       | `text`, `rich`, `file`, `image`, or `binary`             |
-| `mime`      | yes       | primary MIME; normally `payloads[0].mime`                |
-| `bytes`     | yes       | sum of persisted payload raw byte counts                 |
-| `contentBytes` | yes       | byte length of length-framed canonical content |
-| `contentSha256` | yes       | lowercase SHA-256 of that canonical content       |
-| `createdAt` | yes       | first insert time from `GLib.get_real_time()`            |
-| `usedAt`    | yes       | MRU time from `GLib.get_real_time()`                     |
-| `payloads`  | yes       | one or more payload entries; primary payload first       |
+| field           | persisted | meaning                                                  |
+| --------------- | --------- | -------------------------------------------------------- |
+| `id`            | yes       | record uuid; monitor capture id is reused when available |
+| `kind`          | yes       | `text`, `rich`, `file`, `image`, or `binary`             |
+| `mime`          | yes       | primary MIME; normally `payloads[0].mime`                |
+| `bytes`         | yes       | sum of persisted payload raw byte counts                 |
+| `contentBytes`  | yes       | byte length of length-framed canonical content           |
+| `contentSha256` | yes       | lowercase SHA-256 of that canonical content              |
+| `createdAt`     | yes       | first insert time from `GLib.get_real_time()`            |
+| `usedAt`        | yes       | MRU time from `GLib.get_real_time()`                     |
+| `payloads`      | yes       | one or more payload entries; primary payload first       |
 
 Both content-identity fields are required. `kind` is kept outside the digest and is the first
 part of the candidate key. `contentBytes` is the size of the canonical framed identity input,
@@ -116,15 +116,15 @@ These fields are not persisted:
 - monitor state: `_lastContent`
 - runtime-only dedup index buckets and cached composite keys
 - old single-payload fields: `text`, `data`, `uri`, `encoding`
-- restore bookkeeping: `lastPasteMode` (`kind=rich` only; tracks which mode was last
-  actually written so the [recent top restore shortcut](03-clipboard/README.md#recent-top-restore-shortcut)
+- restore bookkeeping: `lastPasteMode` (`kind=rich`: `rich`/`plain`; `kind=file`:
+  `file`/`path`; tracks which mode was last actually written so the [recent top restore shortcut](03-clipboard/README.md#recent-top-restore-shortcut)
   only skips a write when the requested mode is unchanged)
 
 
 ## Kind payloads
 
 | kind     | primary payload                                                                                                         | restore behavior                                                                                                                           |
-|----------|-------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `text`   | `text/plain;charset=utf-8`, `encoding=utf8`                                                                             | `Clipboard.setText(value)`                                                                                                                 |
 | `rich`   | primary rich text MIME (`text/html`, `text/rtf`, `text/richtext`, or `text/markdown`), plus plain text fallback payload | plain mode writes fallback text; rich mode currently writes the primary rich MIME as one MIME, with multi-MIME restore left as a follow-up |
 | `file`   | `text/uri-list`, `encoding=uri-list`                                                                                    | file targets receive `x-special/gnome-copied-files`; other targets receive decoded path text                                               |

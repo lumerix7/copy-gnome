@@ -36,18 +36,18 @@ Fail-closed rules (see also [CLAUDE.md](../../CLAUDE.md)):
 Every method returns a single string: a JSON **envelope**. Success is
 `{ "ok": true, ... }`; failure is `{ "ok": false, "code": "...", "error": "..." }`.
 
-| Method             | In args              | Success payload                                    |
-|--------------------|----------------------|----------------------------------------------------|
-| `List`             | `u limit` (0 = all)  | `{ total, items: [item] }`                         |
-| `Get`              | `s id`               | `{ item }` with `payloads` included                |
-| `Use`              | `s id, s mode`       | `{ id, kind }` - restore + MRU touch, **no auto-paste**; `mode` `""`/`rich`/`plain` |
-| `CopyText`         | `s text`             | `{ id, bytes }` - new text entry + clipboard write |
-| `GetClipboardText` | -                    | `{ hasText, text }`                                |
-| `Search`           | `s query, u limit`   | `{ total, items }` - case-insensitive substring over text/uri payloads |
-| `Remove`           | `s id`               | `{ id }`                                           |
-| `Clear`            | -                    | `{ cleared }`                                      |
-| `Popup`            | -                    | `{}` - toggles the popup, same as the keybinding   |
-| `Status`           | -                    | `{ uuid, version, ready, count }`                  |
+| Method             | In args             | Success payload                                                                                                                                                   |
+| ------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `List`             | `u limit` (0 = all) | `{ total, items: [item] }`                                                                                                                                        |
+| `Get`              | `s id`              | `{ item }` with `payloads` included                                                                                                                               |
+| `Use`              | `s id, s mode`      | `{ id, kind }` - restore + MRU touch, **no auto-paste**; `mode` `""` (auto), `rich`/`plain` (rich) or `path`/`file` (file); a mode for another kind is `bad-args` |
+| `CopyText`         | `s text`            | `{ id, bytes }` - new text entry + clipboard write                                                                                                                |
+| `GetClipboardText` | -                   | `{ hasText, text }`                                                                                                                                               |
+| `Search`           | `s query, u limit`  | `{ total, items }` - case-insensitive substring over text/uri payloads                                                                                            |
+| `Remove`           | `s id`              | `{ id }`                                                                                                                                                          |
+| `Clear`            | -                   | `{ cleared }`                                                                                                                                                     |
+| `Popup`            | -                   | `{}` - toggles the popup, same as the keybinding                                                                                                                  |
+| `Status`           | -                   | `{ uuid, version, ready, count }`                                                                                                                                 |
 
 `item` shape: `{ id, kind, mime, bytes, preview, createdAt, usedAt }`; `preview` is
 derived from payloads for list/search output and is not stored. Timestamps are
