@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 import { log } from './log.js';
+import { getSessionBus } from './session-bus.js';
 import { encodeUtf8 } from './utf8.js';
 import { binaryPayload, plainTextPayload, richPayload } from './payloads.js';
 
@@ -19,27 +20,76 @@ const REQUEST_IFACE = 'org.freedesktop.portal.Request';
 // A dialog left open past this is treated as cancelled so the signal subscription and
 // timer can't leak forever if the portal never answers.
 const RESPONSE_TIMEOUT_SEC = 600;
+const SAVE_CALL_TIMEOUT_MS = 5000;
+const DIRECTORY_QUERY_TIMEOUT_MS = 250;
 
 function existingDirectory(path) {
-    try {
-        return typeof path === 'string' && path && GLib.file_test(path, GLib.FileTest.IS_DIR);
-    } catch (e) {
-        log.debug(`[save]: directory check failed path=${path ?? '(none)'}: ${e.message}`);
-        return false;
-    }
+    if (!path)
+        return Promise.resolve(false);
+    return new Promise(resolve => {
+        const request = new Gio.Cancellable();
+        let timer = 0;
+        let done = false;
+        const finish = value => {
+            if (done)
+                return;
+            done = true;
+            if (timer) {
+                try {
+                    GLib.Source.remove(timer);
+                } catch (error) {
+                    log.error('[save]: directory timer cleanup', error);
+                }
+            }
+            resolve(value);
+        };
+        try {
+            timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DIRECTORY_QUERY_TIMEOUT_MS, () => {
+                timer = 0;
+                if (done)
+                    return GLib.SOURCE_REMOVE;
+                log.warn(`[save]: directory query timed out after ${DIRECTORY_QUERY_TIMEOUT_MS} ms path=${path}`);
+                finish(false);
+                try {
+                    request.cancel();
+                } catch (error) {
+                    log.error('[save]: directory query cancel', error);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+            Gio.File.new_for_path(path).query_info_async('standard::type',
+                Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, request, (file, result) => {
+                    try {
+                        const info = file.query_info_finish(result);
+                        finish(info.get_file_type() === Gio.FileType.DIRECTORY);
+                    } catch (error) {
+                        if (!done)
+                            log.debug('[save]: directory unavailable', error);
+                        finish(false);
+                    }
+                });
+        } catch (error) {
+            log.error('[save]: directory query', error);
+            finish(false);
+        }
+    });
 }
 
 function pathVariant(path) {
     return new GLib.Variant('ay', [...encodeUtf8(path), 0]);
 }
 
-export function defaultSaveDirectory() {
+async function defaultSaveDirectory() {
     const candidates = [
         GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD),
         GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS),
         GLib.get_home_dir(),
     ];
-    return candidates.find(existingDirectory) ?? null;
+    for (const path of candidates) {
+        if (await existingDirectory(path))
+            return path;
+    }
+    return null;
 }
 
 const MIME_EXTENSIONS = {
@@ -127,7 +177,7 @@ export function savePlan(rec) {
             ? { bytes: encodeUtf8(payload.value), extension: 'txt' }
             : null;
     } catch (e) {
-        log.warn(`[save]: plan failed recordId=${rec?.id ?? '(none)'}: ${e.message}`);
+        log.error(`[save]: plan failed recordId=${rec?.id ?? '(none)'}`, e);
         return null;
     }
 }
@@ -142,7 +192,7 @@ export function defaultSaveName(kind, createdAtUs, extension) {
             : GLib.get_real_time();
         stamp = GLib.DateTime.new_from_unix_local(Math.floor(us / 1000000))?.format('%Y%m%d_%H%M%S') ?? null;
     } catch (e) {
-        log.debug(`[save]: name stamp failed: ${e.message}`);
+        log.debug('[save]: name stamp failed', e);
     }
     return stamp ? `clip-${kindPart}-${stamp}.${extension}` : `clip-${kindPart}.${extension}`;
 }
@@ -153,25 +203,59 @@ let _tokenCounter = 0;
  * Open the portal save dialog. Resolves with the chosen target URI, or null on
  * cancel/failure/timeout. Never rejects.
  */
-export function saveFileDialog({
+export async function saveFileDialog({
     title = 'Save clipboard item',
     suggestedName = 'clip.bin',
-    currentFolder = defaultSaveDirectory(),
+    currentFolder,
+    cancellable = null,
 } = {}) {
+    const connection = await getSessionBus();
+    if (!connection || cancellable?.is_cancelled())
+        return null;
+    const folder = currentFolder === undefined ? await defaultSaveDirectory() :
+        await existingDirectory(currentFolder) ? currentFolder : null;
+    if (cancellable?.is_cancelled())
+        return null;
+    return requestSaveFile(connection, title, suggestedName, folder, cancellable);
+}
+
+function requestSaveFile(connection, title, suggestedName, currentFolder, cancellable) {
     return new Promise(resolve => {
-        const connection = Gio.DBus.session;
+        log.debug('[save]: portal request started');
         let done = false;
         let signalId = 0;
         let timerId = 0;
-        const finish = uri => {
+        let cancelId = 0;
+        let handle = null;
+        let closeOnReply = false;
+        let closeSent = false;
+        const closePortalRequest = () => {
+            if (!handle || closeSent)
+                return;
+            closeSent = true;
+            try {
+                connection.call(PORTAL_BUS, handle, REQUEST_IFACE, 'Close', null, null,
+                    Gio.DBusCallFlags.NO_AUTO_START, 1000, null, (bus, result) => {
+                        try {
+                            bus.call_finish(result);
+                        } catch (error) {
+                            log.debug('[save]: portal close unavailable', error);
+                        }
+                    });
+            } catch (error) {
+                log.error('[save]: portal close setup', error);
+            }
+        };
+        const finish = (uri, close = false) => {
             if (done)
                 return;
             done = true;
+            closeOnReply = close;
             if (signalId) {
                 try {
                     connection.signal_unsubscribe(signalId);
                 } catch (e) {
-                    log.debug(`[save]: unsubscribe failed: ${e.message}`);
+                    log.error('[save]: unsubscribe failed', e);
                 }
                 signalId = 0;
             }
@@ -179,10 +263,21 @@ export function saveFileDialog({
                 try {
                     GLib.Source.remove(timerId);
                 } catch (e) {
-                    log.debug(`[save]: timer cleanup failed: ${e.message}`);
+                    log.error('[save]: timer cleanup failed', e);
                 }
                 timerId = 0;
             }
+            if (cancelId) {
+                try {
+                    cancellable.disconnect(cancelId);
+                } catch (error) {
+                    log.error('[save]: remove cancellation handler', error);
+                }
+                cancelId = 0;
+            }
+            if (close)
+                closePortalRequest();
+            log.debug(`[save]: portal request finished selected=${!!uri}`);
             resolve(uri);
         };
         const subscribe = handlePath => connection.signal_subscribe(
@@ -190,6 +285,8 @@ export function saveFileDialog({
             Gio.DBusSignalFlags.NONE,
             (_c, _sender, _path, _iface, _signal, params) => {
                 try {
+                    if (done || cancellable?.is_cancelled())
+                        return;
                     const [response, results] = params.deepUnpack();
                     if (response !== 0) {
                         log.debug(`[save]: dialog closed response=${response}`);
@@ -199,7 +296,7 @@ export function saveFileDialog({
                     const uris = results?.uris?.deepUnpack?.() ?? [];
                     finish(typeof uris[0] === 'string' && uris[0] ? uris[0] : null);
                 } catch (e) {
-                    log.warn(`[save]: portal response parse failed: ${e.message}`);
+                    log.error('[save]: portal response parse failed', e);
                     finish(null);
                 }
             });
@@ -212,67 +309,95 @@ export function saveFileDialog({
             const sender = connection.get_unique_name().slice(1).replace(/\./g, '_');
             const expectedHandle = `/org/freedesktop/portal/desktop/request/${sender}/${token}`;
             signalId = subscribe(expectedHandle);
+            if (cancellable) {
+                // Disconnect outside of the cancelled signal itself.
+                cancelId = cancellable.connect(() => {
+                    try {
+                        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                            finish(null, true);
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    } catch (error) {
+                        log.error('[save]: cancellation dispatch', error);
+                    }
+                });
+            }
 
             const options = {
                 handle_token: new GLib.Variant('s', token),
                 current_name: new GLib.Variant('s', suggestedName),
             };
-            if (existingDirectory(currentFolder))
+            if (currentFolder)
                 options.current_folder = pathVariant(currentFolder);
             connection.call(
                 PORTAL_BUS, PORTAL_PATH, FILECHOOSER_IFACE, 'SaveFile',
                 new GLib.Variant('(ssa{sv})', ['', title, options]),
                 new GLib.VariantType('(o)'),
-                Gio.DBusCallFlags.NONE, -1, null,
+                // The acknowledgement is bounded and must still deliver the actual handle
+                // if the caller retires before the portal creates its request object.
+                Gio.DBusCallFlags.NONE, SAVE_CALL_TIMEOUT_MS, null,
                 (conn, res) => {
                     try {
-                        const [handle] = conn.call_finish(res).deepUnpack();
-                        if (handle !== expectedHandle && !done) {
+                        const [actualHandle] = conn.call_finish(res).deepUnpack();
+                        handle = actualHandle;
+                        if (done) {
+                            if (closeOnReply)
+                                closePortalRequest();
+                            return;
+                        }
+                        if (cancellable?.is_cancelled()) {
+                            finish(null, true);
+                            return;
+                        }
+                        if (handle !== expectedHandle) {
                             try {
                                 connection.signal_unsubscribe(signalId);
                             } catch (e) {
-                                log.debug(`[save]: resubscribe cleanup failed: ${e.message}`);
+                                log.error('[save]: resubscribe cleanup failed', e);
                             }
                             signalId = subscribe(handle);
                         }
                     } catch (e) {
-                        log.warn(`[save]: portal SaveFile failed: ${e.message}`);
-                        finish(null);
+                        if (cancellable?.is_cancelled())
+                            log.warn('[save]: portal did not acknowledge the cancelled request');
+                        else
+                            log.error('[save]: portal SaveFile failed', e);
+                        finish(null, true);
                     }
                 });
 
             timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, RESPONSE_TIMEOUT_SEC, () => {
                 timerId = 0;
                 log.warn('[save]: portal response timed out');
-                finish(null);
+                finish(null, true);
                 return GLib.SOURCE_REMOVE;
             });
         } catch (e) {
-            log.warn(`[save]: portal call setup failed: ${e.message}`);
+            log.error('[save]: portal call setup failed', e);
             finish(null);
         }
     });
 }
 
 /** Write bytes to a portal-returned URI. Resolves true/false, never rejects. */
-export function writeBytesToUri(uri, u8) {
+export function writeBytesToUri(uri, u8, cancellable = null) {
     return new Promise(resolve => {
         try {
             const file = Gio.File.new_for_uri(uri);
             file.replace_contents_bytes_async(
                 new GLib.Bytes(u8), null, false,
-                Gio.FileCreateFlags.REPLACE_DESTINATION, null,
+                Gio.FileCreateFlags.REPLACE_DESTINATION, cancellable,
                 (f, res) => {
                     try {
                         f.replace_contents_finish(res);
                         resolve(true);
                     } catch (e) {
-                        log.warn(`[save]: write failed uri=${uri}: ${e.message}`);
+                        log.error(`[save]: write failed uri=${uri}`, e);
                         resolve(false);
                     }
                 });
         } catch (e) {
-            log.warn(`[save]: write setup failed uri=${uri}: ${e.message}`);
+            log.error(`[save]: write setup failed uri=${uri}`, e);
             resolve(false);
         }
     });
@@ -283,7 +408,7 @@ export function uriDisplayPath(uri) {
     try {
         return Gio.File.new_for_uri(uri).get_path() ?? uri;
     } catch (e) {
-        log.debug(`[save]: display path failed: ${e.message}`);
+        log.debug('[save]: display path failed', e);
         return uri;
     }
 }

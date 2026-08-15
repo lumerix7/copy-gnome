@@ -275,7 +275,7 @@ export class History {
             }
             return fingerprint;
         } catch (e) {
-            log.warn(`history fingerprint skipped recordId=${record?.id ?? '(none)'} kind=${record?.kind ?? '(none)'} reason=${String(e?.message ?? e)}`);
+            log.error(`history fingerprint skipped recordId=${record?.id ?? '(none)'} kind=${record?.kind ?? '(none)'}`, e);
             return null;
         }
     }

@@ -1,6 +1,5 @@
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
-import GLib from 'gi://GLib';
 import St from 'gi://St';
 
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -8,6 +7,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { log } from '../core/log.js';
+import { Completions } from '../core/completions.js';
 
 // Top-panel button. Clicking it (any button / touch) or activating it from the keyboard
 // opens the SAME history widget as the global shortcut - see ui/popup.js. The only
@@ -43,7 +43,8 @@ class Indicator extends PanelMenu.Button {
         this._onClear = onClear ?? (() => {});
         this._onPreferences = onPreferences ?? (() => {});
         this._clearArmed = false;
-        this._clearConfirmTimer = 0;
+        this._work = new Completions();
+        this._cancelClear = null;
         this._clearItem = null;
         // WARNING: this must stay separate from this.menu. `this.menu` is the dummy menu from
         // dontCreateMenu=true; using a real PanelMenu.Button menu regresses primary click.
@@ -60,59 +61,79 @@ class Indicator extends PanelMenu.Button {
         this.add_child(this._icon);
 
         this._contextMenu.addAction('Show', () => this._show());
-        this._clearItem = new ConfirmMenuItem('Clear history', event => this._onClearMenu(event));
+        this._clearItem = new ConfirmMenuItem('Clear history',
+            this._work.onSignal('indicator clear confirmation', () => this._onClearMenu()));
         this._contextMenu.addMenuItem(this._clearItem);
         this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._contextMenu.addAction('Preferences', () => this._openPreferences());
 
         // Keyboard activation (Top Bar navigation → Enter/Space) opens the popup too.
         this.connect('key-press-event', (_actor, event) => {
-            const sym = event.get_key_symbol();
-            if (sym === Clutter.KEY_Return || sym === Clutter.KEY_KP_Enter ||
-                sym === Clutter.KEY_space) {
-                this._open();
+            if (!this._work)
+                return Clutter.EVENT_STOP;
+            try {
+                const sym = event.get_key_symbol();
+                if (sym === Clutter.KEY_Return || sym === Clutter.KEY_KP_Enter || sym === Clutter.KEY_space) {
+                    this._open();
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            } catch (error) {
+                log.error('indicator key-press-event', error);
                 return Clutter.EVENT_STOP;
             }
-            return Clutter.EVENT_PROPAGATE;
         });
         this.connect('destroy', () => {
-            this._clearArmed = false;
-            this._cancelClearTimer();
+            this.retire();
             this._clearItem = null;
-            this._contextMenu?.destroy?.();
+            const menu = this._contextMenu;
             this._contextMenu = null;
             this._contextMenuManager = null;
+            try {
+                menu?.destroy();
+            } catch (error) {
+                log.error('indicator menu cleanup', error);
+            }
         });
     }
 
+    retire() {
+        const work = this._work;
+        this._work = null;
+        this._clearArmed = false;
+        this._cancelClear = null;
+        work?.close();
+    }
+
     _open() {
-        const targetWindow =
-            global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
+        if (!this._work) return;
         try {
+            const targetWindow = global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
             this._contextMenu?.close?.();
             this._onOpen?.(this, targetWindow);
         } catch (e) {
-            log.warn(`indicator open failed: ${e.message}`);
+            log.error('indicator open failed', e);
         }
     }
 
     _show() {
-        const targetWindow =
-            global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
+        if (!this._work) return;
         try {
+            const targetWindow = global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
             this._contextMenu?.close?.();
             this._onShow?.(this, targetWindow);
         } catch (e) {
-            log.warn(`indicator show failed: ${e.message}`);
+            log.error('indicator show failed', e);
         }
     }
 
     _openPreferences() {
+        if (!this._work) return;
         try {
             this._contextMenu?.close?.();
             this._onPreferences();
         } catch (e) {
-            log.warn(`indicator preferences failed: ${e.message}`);
+            log.error('indicator preferences failed', e);
         }
     }
 
@@ -120,30 +141,32 @@ class Indicator extends PanelMenu.Button {
         try {
             return event.get_button();
         } catch (e) {
-            log.debug(`indicator button unavailable: ${e.message}`);
+            log.debug('indicator button unavailable', e);
             return 0;
         }
     }
 
-    _onClearMenu(_event) {
+    _onClearMenu() {
+        if (!this._work) return;
         if (!this._clearArmed) {
-            this._clearArmed = true;
-            if (this._clearItem)
-                this._clearItem.label.text = 'Click again to clear all';
-            if (this._clearConfirmTimer) {
-                try {
-                    GLib.Source.remove(this._clearConfirmTimer);
-                } catch (e) {
-                    log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
-                }
+            this._cancelClear = this._work.after('indicator clear confirmation timeout', 3000, () => {
+                this._cancelClear = null;
+                this._disarmClear();
+                log.debug('[indicator]: clear history confirmation expired');
+            });
+            if (!this._cancelClear)
+                return;
+            try {
+                if (this._clearItem)
+                    this._clearItem.label.text = 'Click again to clear all';
+            } catch (error) {
+                const cancel = this._cancelClear;
+                this._cancelClear = null;
+                cancel();
+                log.error('indicator show clear confirmation', error);
+                return;
             }
-            this._clearConfirmTimer = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT, 3000, () => {
-                    this._clearConfirmTimer = 0;
-                    this._disarmClear();
-                    log.debug('[indicator]: clear history confirmation expired');
-                    return GLib.SOURCE_REMOVE;
-                });
+            this._clearArmed = true;
             log.debug('[indicator]: clear history armed from context menu');
             return;
         }
@@ -153,35 +176,27 @@ class Indicator extends PanelMenu.Button {
             this._onClear();
             log.debug('[indicator]: clear history confirmed from context menu');
         } catch (e) {
-            log.warn(`indicator clear failed: ${e.message}`);
+            log.error('indicator clear failed', e);
         }
         this._contextMenu?.close?.();
     }
 
     _toggleMenu() {
+        if (!this._work) return;
         try {
             this._disarmClear();
             this._contextMenu?.toggle?.();
             log.debug('[indicator]: context menu toggled from secondary click');
         } catch (e) {
-            log.warn(`indicator context menu failed: ${e.message}`);
+            log.error('indicator context menu failed', e);
         }
-    }
-
-    _cancelClearTimer() {
-        if (!this._clearConfirmTimer)
-            return;
-        try {
-            GLib.Source.remove(this._clearConfirmTimer);
-        } catch (e) {
-            log.debug(`indicator clear confirm cleanup failed: ${e.message}`);
-        }
-        this._clearConfirmTimer = 0;
     }
 
     _disarmClear() {
         this._clearArmed = false;
-        this._cancelClearTimer();
+        const cancel = this._cancelClear;
+        this._cancelClear = null;
+        cancel?.();
         if (this._clearItem)
             this._clearItem.label.text = 'Clear history';
     }
@@ -202,12 +217,17 @@ class Indicator extends PanelMenu.Button {
     // Open the shared popup on touch, anchored under this icon. Mouse button handling lives in
     // vfunc_button_press_event/release_event so there is a single pointer path.
     vfunc_event(event) {
-        const type = event.type();
-        if (type === Clutter.EventType.TOUCH_BEGIN) {
-            this._open();
+        if (!this._work) return Clutter.EVENT_PROPAGATE;
+        try {
+            if (event.type() === Clutter.EventType.TOUCH_BEGIN) {
+                this._open();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        } catch (error) {
+            log.error('indicator event', error);
             return Clutter.EVENT_STOP;
         }
-        return Clutter.EVENT_PROPAGATE;
     }
 
     // The popup reads live history when it opens, so there is nothing to rebuild here. Kept

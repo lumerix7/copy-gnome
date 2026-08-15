@@ -1,7 +1,7 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
-import { log } from './log.js';
+import { errorMessage, log } from './log.js';
 import { parseYaml, serializeYaml } from '../vendor/yaml.js';
 
 // Defaults mirror docs/05-config.md. The on-disk config.yaml (or config.json) is merged
@@ -134,36 +134,43 @@ function readFile(path) {
         if (!ok) return null;
         return new TextDecoder().decode(contents);
     } catch (e) {
-        log.warn(`failed reading ${path}: ${e.message}`);
+        log.error(`failed reading ${path}`, e);
         return null;
     }
 }
 
 // Loads config from <configDir>/config.yaml (preferred) or config.json. Returns the
-// merged config object; always succeeds (defaults on any failure).
+// merged config object. Strict callers receive parse failures instead of defaults.
 export function loadConfig(configDir, opts = {}) {
+    const read = opts.readFile ?? readFile;
     const yamlPath = GLib.build_filenamev([configDir, 'config.yaml']);
     const jsonPath = GLib.build_filenamev([configDir, 'config.json']);
 
     let parsed = null;
-    const yamlText = readFile(yamlPath);
+    const yamlText = read(yamlPath);
     if (yamlText !== null) {
         try {
             parsed = parseYaml(yamlText);
             if (!opts.quiet)
                 log.info(`loaded config: ${yamlPath}`);
         } catch (e) {
-            log.error(`config.yaml parse error (${e.message}); using defaults`);
+            if (opts.strict)
+                throw e;
+            log.error('config.yaml parse error; using defaults', e);
         }
     } else {
-        const jsonText = readFile(jsonPath);
+        const jsonText = read(jsonPath);
         if (jsonText !== null) {
             try {
                 parsed = JSON.parse(jsonText);
+                if (opts.strict && !isObject(parsed))
+                    throw new Error('config.json must contain an object');
                 if (!opts.quiet)
                     log.info(`loaded config: ${jsonPath}`);
             } catch (e) {
-                log.error(`config.json parse error (${e.message}); using defaults`);
+                if (opts.strict)
+                    throw e;
+                log.error('config.json parse error; using defaults', e);
             }
         }
     }
@@ -330,7 +337,7 @@ export function saveConfig(configDir, config) {
         }
         return { ok: true, format: useYaml ? 'yaml' : 'json', path };
     } catch (e) {
-        log.warn(`saveConfig failed: ${e.message}`);
-        return { ok: false, format: useYaml ? 'yaml' : 'json', error: e.message };
+        log.error('saveConfig failed', e);
+        return { ok: false, format: useYaml ? 'yaml' : 'json', error: errorMessage(e) };
     }
 }

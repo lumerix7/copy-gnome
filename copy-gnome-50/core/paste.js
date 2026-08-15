@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 
 import { log } from './log.js';
 
@@ -92,7 +93,7 @@ function injectKeys(keys, prefix) {
         pressed.length = 0;
         return true;
     } catch (e) {
-        log.warn(`${prefix}paste injection failed keys=${label} reason=${String(e?.message ?? e)}`);
+        log.error(`${prefix}paste injection failed keys=${label}`, e);
         return false;
     } finally {
         try {
@@ -101,7 +102,7 @@ function injectKeys(keys, prefix) {
             for (const m of pressed.reverse())
                 d?.notify_keyval(t, m, Clutter.KeyState.RELEASED);
         } catch (e) {
-            log.warn(`${prefix}paste key cleanup failed keys=${label} reason=${String(e?.message ?? e)}`);
+            log.error(`${prefix}paste key cleanup failed keys=${label}`, e);
         }
     }
 }
@@ -114,6 +115,79 @@ export function paste(keys, context = '[paste]') {
     const prefix = context ? `${context}: ` : '[paste]: ';
     log.debug(`${prefix}paste injection keys=${keysLabel(keys) || '(none)'}`);
     return injectKeys(keys, prefix);
+}
+
+export function pasteWindowId(window) {
+    return window?.get_stable_sequence() ?? null;
+}
+
+export function findPasteWindow(id) {
+    if (id === null)
+        return null;
+    const focused = global.display.get_focus_window();
+    if (pasteWindowId(focused) === id)
+        return focused;
+    for (const actor of global.get_window_actors()) {
+        const window = actor.meta_window;
+        if (pasteWindowId(window) === id)
+            return window;
+    }
+    return null;
+}
+
+export function schedulePaste(timers, clipboard, { windowId, recordId, keys, restoreFocus, delayMs }, inject = paste) {
+    const context = `[paste] recordId=${recordId} windowId=${windowId}`;
+    if (windowId === null) {
+        log.warn(`${context}: skipped reason=no-target-window`);
+        return;
+    }
+    const version = clipboard.version;
+    const stillCurrent = () => clipboard.active && clipboard.version === version && clipboard.recordId === recordId;
+    if (!stillCurrent()) {
+        log.warn(`${context}: skipped reason=clipboard-unconfirmed`);
+        return;
+    }
+    const shortcut = keys.slice();
+    const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
+        if (!timers.has(id))
+            return GLib.SOURCE_REMOVE;
+        try {
+            log.debug(`${context}: timer started`);
+            if (!stillCurrent()) {
+                log.warn(`${context}: skipped reason=clipboard-changed expectedVersion=${version} currentVersion=${clipboard.version}`);
+                return GLib.SOURCE_REMOVE;
+            }
+            const target = findPasteWindow(windowId);
+            if (!target || target.minimized) {
+                log.warn(`${context}: skipped reason=target-unavailable`);
+                return GLib.SOURCE_REMOVE;
+            }
+            if (restoreFocus && pasteWindowId(global.display.get_focus_window()) !== windowId) {
+                log.debug(`${context}: activating target`);
+                target.activate(global.get_current_time());
+            }
+            if (pasteWindowId(global.display.get_focus_window()) !== windowId) {
+                log.warn(`${context}: skipped reason=target-not-focused`);
+                return GLib.SOURCE_REMOVE;
+            }
+            if (!timers.has(id))
+                return GLib.SOURCE_REMOVE;
+            if (!stillCurrent()) {
+                log.warn(`${context}: skipped reason=clipboard-changed-during-focus`);
+                return GLib.SOURCE_REMOVE;
+            }
+            if (!inject(shortcut, context))
+                log.warn(`${context}: injection failed`);
+        } catch (error) {
+            log.error(`${context}: scheduled paste`, error);
+        } finally {
+            timers.delete(id);
+            log.debug(`${context}: timer finished`);
+        }
+        return GLib.SOURCE_REMOVE;
+    });
+    timers.add(id);
+    log.debug(`${context}: scheduled delayMs=${delayMs}`);
 }
 
 export function resetPaste() {

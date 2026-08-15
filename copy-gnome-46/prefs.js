@@ -77,7 +77,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
         try {
             this._config = loadConfig(this._paths.config, { quiet: true });
         } catch (e) {
-            log.warn(`prefs: config reload after failed save: ${e.message}`);
+            log.error('prefs: config reload after failed save', e);
         }
         this._showError('Failed to save config',
             `Your change was NOT written to disk and was reverted in memory: ${r.error}`);
@@ -99,7 +99,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
                 dlg.set_transient_for(this._window);
             dlg.present();
         } catch (e) {
-            log.warn(`prefs: error dialog failed: ${e.message}`);
+            log.error('prefs: error dialog failed', e);
         }
     }
 
@@ -233,7 +233,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             else
                 throw new Error('clipboard API unavailable');
         } catch (e) {
-            log.warn(`prefs: copy failed: ${e.message}`);
+            log.error('prefs: copy failed', e);
         }
     }
 
@@ -604,7 +604,7 @@ export default class CopyGnomePrefs extends ExtensionPreferences {
             const [, contents] = Gio.File.new_for_path(path).load_contents(null);
             return JSON.parse(new TextDecoder().decode(contents));
         } catch (e) {
-            log.warn(`prefs: metadata.json read failed: ${e.message}`);
+            log.error('prefs: metadata.json read failed', e);
             return {};
         }
     }

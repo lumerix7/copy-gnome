@@ -9,38 +9,32 @@ The running extension keeps the actual history in memory:
   supersedes older unsaved ones.
 - Search and popup operate only from memory.
 
-Persisted JSONL is an append-only sequence of full-history snapshots. The latest non-empty
-line is the only durable history view after restart; if it is invalid, startup begins empty.
+Persisted JSONL is an append-only sequence of full-history snapshots. Startup loads the
+newest valid snapshot within its recovery budget. A valid empty snapshot represents a clear.
 
 
 ## Startup
 
-1. Pick the current daily clips file by name, e.g. `clips-20260628.jsonl`.
-2. If it does not exist, find the newest older `clips-*.jsonl`.
-3. Read only enough tail bytes to contain one internal maximum snapshot line.
-4. Parse the newest non-empty line only.
-5. Sort by effective recency, newest first.
-6. Start with empty history if the file is missing, unreadable, or the newest line does not
-   match the current schema.
-7. Never move, copy, rewrite, or truncate old clip files during startup.
-8. Opening/creating the current day file is allowed only so future writes can append.
-9. Do not repair, migrate, rewrite, or scan old schema lines during startup.
-10. If step 2 had to fall back to an older file, that file's age (by filename date) is
-    compared against `history.maxAgeDays`. Once it has already reached that age - the same
-    file the very next retention sweep would otherwise delete - its snapshot is re-persisted
-    as one line in today's file, the same append path a normal flush uses, before that sweep
-    runs. A younger fallback file (an ordinary daily reboot) is left alone: this is a no-op
-    when step 1 already found today's file, the recovered snapshot is empty/invalid, or the
-    fallback file has not yet reached `maxAgeDays` - a later real copy re-homes it same as
-    always (see [Day Switching](#day-switching) below). This re-home runs in the background;
-    it does not delay the monitor, popup, indicator, keybindings, or IPC coming up, only the
-    sweep waits for it; see [cleanup-and-limits](cleanup-and-limits.md#cleanup).
+1. Scan today's file backwards from the tail. If no valid snapshot is found, try the newest
+   other daily file within the same budget.
+2. Check at most 10 lines and read about 128 MiB in total, with a 64 MiB cap per line. Stop
+   on the first valid snapshot, including an empty one, and sort by recency.
+3. If files exist but recovery is unavailable, use memory-only history for the session.
+   Keep the on-disk files for offline repair.
+4. Protect a recovered older file from retention until a newer snapshot is saved. If that
+   file has already reached `history.maxAgeDays`, attempt to append the recovered snapshot
+   to today's file before the first sweep. Only the sweep waits for this append.
+
+Startup and retention use separate cancellable requests with a five-second deadline each.
+Directory entries are read in batches of 64, capped at 16,384 entries per request.
+Disabling the extension cancels these requests. See
+[cleanup-and-limits](cleanup-and-limits.md#cleanup).
 
 
 ## Day Switching
 
 Day switching is just filename selection for future appends, with one startup exception -
-step 10 above re-homes a fallback file immediately, without waiting for a flush, once that
+step 4 above re-homes a fallback file immediately, without waiting for a flush, once that
 file has reached `history.maxAgeDays`:
 
 - Each flush appends a full snapshot to the current day's file.
@@ -59,7 +53,7 @@ Hot path:
 2. Convert content into one self-contained in-memory record.
 3. If conversion or size validation fails, skip the record and warn.
 4. Update in-memory history.
-5. Replace the pending serialized JSON line with the latest full-history snapshot.
+5. Replace the pending batch with the latest full-history snapshot.
 6. Leave it pending; the periodic timer appends it once per `storage.flushIntervalSec`.
 
 Flush policy:
@@ -69,15 +63,14 @@ Flush policy:
   pending snapshot in memory, so each daily JSONL is written at most once per interval.
 - Periodic flush is append-only. It must not modify existing bytes, rewrite prior lines,
   move files, or compact old data.
-- On `disable()`, only do a tiny best-effort final append. If pending data is too large,
-  the store is busy, or IO is degraded, skip final append rather than blocking Shell
-  teardown.
+- On `disable()`, hand the latest pending snapshot to the background writer if
+  persistence is available. Shell teardown returns without waiting for file I/O.
+- A write after an incomplete line appends a newline before writing the new snapshot.
 - Never compact or scan old files from `disable()`.
 - If an append fails, warn and drop that pending batch. Do not retry forever from
   `gnome-shell`; future captures may append again if the store becomes writable.
 
-This means the newest pending snapshot may be lost on a hard crash or power loss. Logout /
-`disable()` does a best-effort final flush. That is acceptable for this design.
+An unfinished snapshot may be lost if Shell exits during logout, crashes, or loses power.
 
 
 ## Actions And Durability
@@ -98,7 +91,11 @@ This extension should have only one normal writer: the running `gnome-shell` pro
 Rules:
 
 - No filesystem lock is needed for the single Shell writer.
-- Use an in-process append queue/mutex to serialize flushes inside the extension.
+- Each history path has one writer slot shared across extension instances in the same
+  Shell. The slot stays occupied until the stream closes. Regular flushes leave the
+  latest snapshot pending when busy. A retiring instance can reserve one final batch.
+- Startup waits up to two seconds for the writer of the selected history file. If the
+  writer remains active, the extension uses memory-only history for that session.
 - CLI and `doctor` are read-only by default.
 - A future CLI write should go through the extension service instead of writing files
   directly.

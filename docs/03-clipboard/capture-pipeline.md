@@ -1,8 +1,8 @@
 # Clipboard capture - restore, enqueue, drain
 
 > Target design for the capture pipeline (monitor + extension). Producer/consumer split: the
-> `owner-changed` handler (**enqueue side**) is trivial - it only snapshots the
-> synchronously-available fields and pushes a job; the **drain side** does all the work
+> `owner-changed` handler (**enqueue side**) checks privacy, copies the job's policy and
+> owner metadata, and queues it. The **drain side** handles payloads
 > (read content, compare-with-last, drop/capture). Agreed model: single `_lastContent`,
 > **no TTL**, drop decided by consecutive content match (same `type` + same `value`),
 > no monitor/enqueue history lookup or hash, no enqueue-time marking, no grace window; a
@@ -32,8 +32,9 @@ Per-job pipeline lines carry `id=<uuid> seq=<n>`. Loop/lifecycle lines (drain st
 ### `job` (one per owner-changed; built by the enqueue side)
 
 ```
-job = { id, seq, sourceLabel, sourceKind, mimes }
-       sourceKind: 'memory' | 'non-memory'   // memory = Shell-owned (our writes, screenshots, caches)
+job = { id, seq, clipboardVersion, sourceLabel, sourceKind, mimes,
+        captureFiles, captureImages, maxItemBytes, maxTextBytes, maxBinaryBytes }
+       sourceKind: 'memory' | 'non-memory' | 'unknown'   // memory = Shell-owned (our writes, screenshots, caches)
 ```
 
 `sourceKind` + `mimes` are snapshotted **synchronously at receive** (the source may go stale
@@ -50,7 +51,7 @@ _lastContent = { id, origin, sourceKind, source, type, value }
 ```
 
 | field        | meaning                                                  | set on restore                   | set on capture         |
-|--------------|----------------------------------------------------------|----------------------------------|------------------------|
+| ------------ | -------------------------------------------------------- | -------------------------------- | ---------------------- |
 | `id`         | trace uuid                                               | a fresh uuid for this self-write | the producing `job.id` |
 | `origin`     | how it was set - splits log reason (echo vs replay)      | `'restore'`                      | `'capture'`            |
 | `type`       | content kind: `text` / `file` / `image` - **rule field** | the restored kind                | the captured kind      |
@@ -126,31 +127,29 @@ and is dropped on the drain side. Restore itself enqueues nothing.
 
 ```mermaid
 flowchart TD
-    A["1 owner-changed received"] --> B{"2 stopped, not CLIPBOARD, or no source"}
-    B -- "skip" --> Z["return"]
-    B -- "ok" --> C["3 build job: id=uuid, seq, sourceKind, mimes - sync snapshot"]
-    C --> D["4 push job to FIFO queue"]
-    D --> E["5 if not draining, start drain"]
+    A["CLIPBOARD owner change"] --> B{"Public offer with validated MIME metadata?"}
+    B -- no --> Z["Discard queued and in-flight reads"]
+    B -- yes --> C["Copy source metadata, capture flags and byte limits"]
+    C --> D["Enqueue, dropping the oldest pending job if full"]
+    D --> E["Schedule one read on the main loop"]
 ```
 
-1. **Receive** `owner-changed`.
-2. **Guard:** ignore if stopped, not the CLIPBOARD selection, or the source is null
-   (selection cleared) → return.
-3. **Build job:** assign `id` (uuid) and `seq`; snapshot `sourceKind` (from the source label)
-   and `mimes` (`get_mimetypes()`) **synchronously** - the source may go stale before the
-   drain reaches it. No content read here.
-4. **Push** the job onto the FIFO queue.
-5. If the drain loop is idle, **start** it. The handler returns immediately; all real work is
-   on the drain side.
+The signal handler checks the complete MIME list against `privacy.secretMimes` before
+admission. Each list is limited to 256 MIME strings of up to 1,024 characters. A clear,
+concealed selection, invalid metadata or a changed privacy list retires outstanding
+reads and queued jobs. Only JS-owned metadata and scalar configuration enter the queue.
+
+At most 32 jobs wait behind one active read. On overflow the newest jobs keep their FIFO
+order. A warning marks saturation and a summary reports how many pending jobs were dropped.
 
 
 ## Flow 3 - Drain (consumer; the only place content is read and decided)
 
 ```mermaid
 flowchart TD
-    A["1 dequeue next job in FIFO order"] --> B["2 privacy skip; classify mimes, pick mime, read content C and type via clipboard wrapper"]
+    A["1 dequeue next job in FIFO order"] --> B["2 classify snapshot MIME types and read through the clipboard wrapper"]
     B --> C{"3 compare last: type==last.type AND value==last.value"}
-    C -- "yes and last.origin=restore" --> X1["drop - log echo"]
+    C -- "yes and restore, except an external file offer" --> X1["drop - log echo"]
     C -- "yes and sourceKind=memory" --> X2["drop - log stale-replay"]
     C -- "yes otherwise" --> X3["suppress repeat - log same-last"]
     C -- "no" --> D{"file path twin? memory text/plain equals decoded _lastContent file URI-list path"}
@@ -158,7 +157,7 @@ flowchart TD
     D -- "no" --> E{"rich plain twin? memory text/plain equals previous rich plain fallback"}
     E -- "yes" --> X5["drop - log rich-plain-twin"]
     E -- "no" --> G["4 capture → history.add id=job.id → setLastContent type value origin=capture"]
-    X1 --> H["5 continue until queue empty"]
+    X1 --> H["5 schedule next idle dispatch"]
     X2 --> H
     X3 --> H
     X4 --> H
@@ -166,9 +165,10 @@ flowchart TD
     G --> H
 ```
 
-1. A single **drain** loop dequeues jobs in arrival (FIFO) order - reads never overlap.
-2. **Read** content: first skip concealed/secret selections (privacy, by `privacy.secretMimes`);
-   then classify `job.mimes` (uri-list/x-special → file, image/png → image, text/plain → text),
+1. Each idle dispatch starts at most one job. The detached reader in `core/capture-reader.js`
+   receives the job, its cancellation scope and the current image-degradation flag. Completion
+   delivers JS-owned data through the live monitor registration. Stop retires that registration.
+2. **Read** content: classify `job.mimes` (uri-list/x-special → file, image/png → image, text/plain → text),
    pick the mime, and read `C` + its `type` through the Shell clipboard wrapper path.
    `Meta.SelectionSource.read_async()` is avoided because it can crash `gnome-shell` on
    transient external owners. Each payload is read **at most once** per job: one wrapper
@@ -182,7 +182,10 @@ flowchart TD
    `_lastContent` may be seeded from the history head at runtime start so memory twin
    filters can work across a logout/login boundary. A history seed does **not** suppress
    ordinary same-content copies; it is only input for the file/rich twin checks below.
-   - true and `_last.origin == 'restore'` → **drop**, log `echo` (our write-back coming back).
+   - A matching external file offer goes through `same-last` even after a restore. When
+     its version is current and the history head matches, automatic paste can reuse
+     the owner's original cut/copy action. Explicit modes use the new owner as unconfirmed.
+   - Other matches with `_last.origin == 'restore'` → **drop**, log `echo`.
    - true and `job.sourceKind == 'memory'` → **drop**, log `stale-replay`.
    - true otherwise → **suppress repeat**, log `same-last` (consecutive same content /
      owner re-announce) and notify extension-side bookkeeping.
@@ -207,21 +210,22 @@ flowchart TD
    For suppressed repeats, extension bookkeeping verifies the current top history record has
    the same kind and payload, then `history.touch(top)` updates `usedAt` and queues the
    normal async snapshot. If top does not match, it warns and skips the touch.
-7. Loop until the queue is empty. Each compare runs against the state the *previous* processed
+7. Schedule the next job on a fresh idle dispatch. Each compare runs against the state the *previous* processed
    job left, so it is consistent with FIFO order - but note a capture can overwrite a pending
    restore marker (see [Known limitations](#known-limitations)).
 
 
 ### Truth table
 
-| current sourceKind | type+value == last | last.origin | result                                                                        |
-|--------------------|--------------------|-------------|-------------------------------------------------------------------------------|
-| any                | no                 | *           | capture if no twin filter matches                                             |
-| any                | yes                | history     | capture if no twin filter matches                                             |
-| any                | yes                | restore     | **drop** (echo)                                                               |
-| memory             | yes                | capture     | **drop** (stale replay)                                                       |
-| non-memory         | yes                | capture     | **drop** (same-last)                                                          |
-| memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=file` and text equals decoded file path |
+| current sourceKind | type+value == last | last.origin | result                                                                          |
+| ------------------ | ------------------ | ----------- | ------------------------------------------------------------------------------- |
+| any                | no                 | *           | capture if no twin filter matches                                               |
+| any                | yes                | history     | capture if no twin filter matches                                               |
+| external file      | yes                | restore     | **suppress repeat** (same-last), verify current version and history head        |
+| other              | yes                | restore     | **drop** (echo)                                                                 |
+| memory             | yes                | capture     | **drop** (stale replay)                                                         |
+| non-memory         | yes                | capture     | **drop** (same-last)                                                            |
+| memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=file` and text equals decoded file path   |
 | memory text/plain  | no                 | *           | **drop** only when `_lastContent.type=rich` and text equals rich plain fallback |
 
 ## File copies
@@ -264,7 +268,7 @@ fail-closed (a wrong call yields at most a duplicate or a missed drop - never a 
   future optimization; if added, it must stay narrow - no global dequeue skip and no skip
   on the file branch, or file-copy / memory-twin semantics break.
 - **Read once, then decide (implemented invariant).** Every payload read is a single wrapper
-  call (`_readSourceBytes`) that returns a JS-owned copy; size/type/drop/capture decisions
+  call through `capture-reader.js` that returns a JS-owned copy. Size/type/drop/capture decisions
   run on that copy and the clipboard is never re-read to re-check a payload. The plain-text
   payload is read at most once per job and shared between the rich branch and its text
   fallback. Plain text has no wrapper-side cap: it is read into memory first, then

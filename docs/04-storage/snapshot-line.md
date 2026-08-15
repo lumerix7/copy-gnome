@@ -13,7 +13,7 @@
 ```
 
 | Field       | Required | Type   | Meaning                                    |
-|-------------|----------|--------|--------------------------------------------|
+| ----------- | -------- | ------ | ------------------------------------------ |
 | `type`      | yes      | string | Snapshot type, currently always `history`. |
 | `writtenAt` | yes      | number | Local write time in GLib microseconds.     |
 | `items`     | yes      | array  | Sorted history records, newest first.      |
@@ -22,9 +22,9 @@ Rules:
 
 - A line is valid only if it parses as JSON, matches the current schema, and stays
   under internal size caps.
-- Normal startup reads a bounded tail and loads only the newest non-empty snapshot line.
-- If loading any candidate file fails, do not repair or move files; start with empty history
-  and append future clips to the current day file.
+- Startup checks up to 10 lines from newest to oldest and stops at the first valid snapshot.
+  A valid empty `items` array represents a clear. If recovery fails, keep the files and
+  use memory-only history for the session.
 
 
 ## Item Shape
@@ -35,22 +35,22 @@ confusion with visual text formatting.
 
 Record fields:
 
-| Field       | Required | Type   | Meaning                                                           |
-|-------------|----------|--------|-------------------------------------------------------------------|
-| `id`        | yes      | string | Stable record identity for UI/CLI actions.                        |
-| `kind`      | yes      | string | Logical item kind: `text`, `rich`, `file`, `image`, `binary`.     |
-| `mime`      | yes      | string | Primary MIME. This should match `payloads[0].mime`.               |
-| `bytes`     | yes      | number | Sum of raw bytes for persisted payload entries.                   |
-| `contentBytes` | yes      | number | Byte length of length-framed canonical content. |
-| `contentSha256` | yes      | string | Lowercase SHA-256 of canonical content.       |
-| `createdAt` | yes      | number | First capture time in GLib microseconds.                          |
-| `usedAt`    | yes      | number | Last restore/touch time in GLib microseconds.                     |
-| `payloads`  | yes      | array  | One or more MIME payload entries. Primary payload first.          |
+| Field           | Required | Type   | Meaning                                                       |
+| --------------- | -------- | ------ | ------------------------------------------------------------- |
+| `id`            | yes      | string | Stable record identity for UI/CLI actions.                    |
+| `kind`          | yes      | string | Logical item kind: `text`, `rich`, `file`, `image`, `binary`. |
+| `mime`          | yes      | string | Primary MIME. This should match `payloads[0].mime`.           |
+| `bytes`         | yes      | number | Sum of raw bytes for persisted payload entries.               |
+| `contentBytes`  | yes      | number | Byte length of length-framed canonical content.               |
+| `contentSha256` | yes      | string | Lowercase SHA-256 of canonical content.                       |
+| `createdAt`     | yes      | number | First capture time in GLib microseconds.                      |
+| `usedAt`        | yes      | number | Last restore/touch time in GLib microseconds.                 |
+| `payloads`      | yes      | array  | One or more MIME payload entries. Primary payload first.      |
 
 Payload entry fields:
 
 | Field      | Required | Type   | Meaning                                             |
-|------------|----------|--------|-----------------------------------------------------|
+| ---------- | -------- | ------ | --------------------------------------------------- |
 | `mime`     | yes      | string | MIME offered/read for this representation.          |
 | `encoding` | yes      | string | `utf8`, `uri-list`, or `base64`.                    |
 | `value`    | yes      | string | Payload value. For `base64`, this is base64 text.   |

@@ -8,6 +8,8 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { log } from '../core/log.js';
+import { pasteWindowId } from '../core/paste.js';
+import { Completions } from '../core/completions.js';
 import { plainTextPayload, uriListPayload } from '../core/payloads.js';
 import { POPUP_PREVIEW_CHARS, recordPreview } from '../core/preview.js';
 
@@ -105,40 +107,17 @@ function num(v, fallback, min = -Infinity, max = Infinity) {
     return clamp(v, min, max);
 }
 
-function eventCoords(event) {
-    try {
-        return event.get_coords();
-    } catch (e) {
-        log.debug(`event coordinates unavailable: ${e.message}`);
-        return null;
-    }
-}
-
-function eventButton(event) {
-    try {
-        return event.get_button();
-    } catch (e) {
-        log.debug(`event button unavailable: ${e.message}`);
-        return 0;
-    }
-}
-
 function eventInsideActor(actor, event) {
     if (!actor)
         return false;
-    const coords = eventCoords(event);
+    const coords = event?.get_coords();
     if (!coords)
         return false;
-    try {
-        const [x, y] = coords;
-        const [actorX, actorY] = actor.get_transformed_position();
-        const [actorW, actorH] = actor.get_transformed_size();
-        return x >= actorX && x <= actorX + actorW &&
-            y >= actorY && y <= actorY + actorH;
-    } catch (e) {
-        log.debug(`actor hit test failed: ${e.message}`);
-        return false;
-    }
+    const [x, y] = coords;
+    const [actorX, actorY] = actor.get_transformed_position();
+    const [actorW, actorH] = actor.get_transformed_size();
+    return x >= actorX && x <= actorX + actorW &&
+        y >= actorY && y <= actorY + actorH;
 }
 
 function setMoveCursor(actor) {
@@ -149,7 +128,7 @@ function setMoveCursor(actor) {
         if (cursor !== undefined)
             actor.set_cursor(cursor);
     } catch (e) {
-        log.debug(`move cursor unavailable: ${e.message}`);
+        log.debug('move cursor unavailable', e);
     }
 }
 
@@ -163,7 +142,7 @@ function interfaceColorScheme() {
             interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
         return interfaceSettings.get_string('color-scheme') || 'unknown';
     } catch (e) {
-        log.debug(`[popup]: gsettings color-scheme unavailable: ${e.message}`);
+        log.debug('[popup]: gsettings color-scheme unavailable', e);
         return 'unknown';
     }
 }
@@ -219,7 +198,7 @@ function monitorForActor(actor) {
                 return m;
         }
     } catch (e) {
-        log.debug(`monitorForActor failed: ${e.message}`);
+        log.debug('monitorForActor failed', e);
     }
     return null;
 }
@@ -258,6 +237,23 @@ function ensureActorVisibleInScrollView(scrollView, actor) {
         adjustment.set_value(value);
 }
 
+function cleanupPopupStep(stage, action) {
+    try {
+        action();
+    } catch (error) {
+        log.error(`[popup]: ${stage} cleanup failed`, error);
+    }
+}
+
+function removePopupActor(stage, actor) {
+    if (!actor)
+        return;
+    cleanupPopupStep(`${stage} input`, () => { actor.reactive = false; });
+    cleanupPopupStep(`${stage} visibility`, () => actor.hide());
+    cleanupPopupStep(`${stage} detach`, () => actor.get_parent()?.remove_child(actor));
+    cleanupPopupStep(`${stage} destroy`, () => actor.destroy());
+}
+
 export class Popup {
     constructor({ getItems, onActivate, onRemove, onClear, onSave, onSaveRecord, onRevealFile, getUi }) {
         this._getItems = getItems;
@@ -266,29 +262,33 @@ export class Popup {
         this._onClear = onClear ?? (() => {});
         this._onSave = onSave ?? (() => 'idle');
         this._onSaveRecord = onSaveRecord ?? (() => {});
-        this._onRevealFile = onRevealFile ?? (() => ({ status: 'skipped' }));
+        this._onRevealFile = onRevealFile ?? (() => {});
         this._getUi = getUi ?? (() => null);
 
+        this._view = null;
         this._backdrop = null;
         this._panel = null;
         this._entry = null;
         this._hint = null;
+        this._hintVersion = 0;
         this._scrollView = null;
         this._listBox = null;
         this._itemMenu = null;
+        this._itemMenuActions = null;
         this._dragHandle = null;
         this._grab = null;
         this._rows = [];        // [{rec, button}]
         this._selected = -1;
         this._visible = false;
         this._numberPickBuffer = '';
-        this._numberPickTimer = 0;
-        this._targetWindow = null;
+        this._numberPickRecordId = null;
+        this._cancelNumberPickTimeout = null;
+        this._targetWindowId = null;
         this._anchorActor = null;
         this._clearBtn = null;
         this._clearArmed = false;
-        this._clearConfirmTimer = 0;
-        this._saveHintTimer = 0;
+        this._cancelClearConfirmTimeout = null;
+        this._cancelSaveHintTimeout = null;
         this._drag = null;
         this._moveBounds = null;
         this._popupTheme = 'dark';
@@ -302,8 +302,7 @@ export class Popup {
             return;
         const selectedId = this._rows[this._selected]?.rec?.id ?? null;
         const fallbackIndex = this._selected;
-        this._rebuild();
-        if (this._rows.length === 0)
+        if (!this._rebuild() || this._rows.length === 0)
             return;
         let next = selectedId == null
             ? -1
@@ -324,10 +323,11 @@ export class Popup {
     show(targetWindow = null, opts = {}) {
         if (this._visible) return;
 
-        let modalPushed = false;
+        this.retireView();
+        this._view = new Completions();
         try {
-        this._targetWindow = targetWindow ??
-            global.display.get_focus_window?.() ?? global.display.focus_window ?? null;
+        this._targetWindowId = pasteWindowId(targetWindow ??
+            global.display.get_focus_window?.() ?? global.display.focus_window);
         const placement = opts.placement === 'panel' ? 'panel' : 'center';
         const movable = placement === 'center';
         const anchorActor = opts.anchorActor ?? null;
@@ -376,6 +376,8 @@ export class Popup {
         this._panel.opacity = Math.round(opacity * 255);
         this._backdrop.add_child(this._panel);
 
+        const dragMotion = this._pointerSignal('drag motion', this._updateDrag);
+        const dragRelease = this._pointerSignal('drag release', this._finishDrag);
         if (movable) {
             this._dragHandle = new St.Widget({
                 style_class: 'cg-drag-handle',
@@ -387,11 +389,11 @@ export class Popup {
                 height: 7,
             });
             this._dragHandle.connect('button-press-event',
-                (_a, event) => this._startDrag(event));
+                this._pointerSignal('drag start', this._startDrag));
             this._dragHandle.connect('motion-event',
-                (_a, event) => this._updateDrag(event));
+                dragMotion);
             this._dragHandle.connect('button-release-event',
-                (_a, event) => this._finishDrag(event));
+                dragRelease);
             setMoveCursor(this._dragHandle);
             this._panel.add_child(this._dragHandle);
         }
@@ -433,34 +435,37 @@ export class Popup {
             x_expand: false,
         });
         this._clearArmed = false;
-        this._clearBtn.connect('clicked', () => this._onClearClicked());
+        this._clearBtn.connect('clicked', this._pointerSignal('clear history', this._onClearClicked));
         footer.add_child(this._clearBtn);
         this._panel.add_child(footer);
 
         Main.layoutManager.uiGroup.add_child(this._backdrop);
 
-        this._entry.clutter_text.connect('text-changed', () => {
-            this._rebuild();
-            this._showNumberHint('');
-        });
-        this._entry.clutter_text.connect('key-focus-in', () => this._onSearchFocusIn());
-        this._entry.clutter_text.connect('key-focus-out', () => this._refreshHintSoon());
+        this._entry.clutter_text.connect('text-changed', this._view.onSignal('popup search text-changed', () => {
+            if (this._rebuild())
+                this._showNumberHint('');
+        }));
+        this._entry.clutter_text.connect('key-focus-in',
+            this._view.onSignal('popup search key-focus-in', () => this._onSearchFocusIn()));
+        this._entry.clutter_text.connect('key-focus-out',
+            this._view.onIdle('popup focus hint', () => this._showNumberHint('')));
         this._entry.clutter_text.connect('key-press-event',
             (_ct, event) => this._onKey(event));
         this._backdrop.connect('key-press-event',
             (_a, event) => this._onKey(event));
         this._backdrop.connect('button-press-event',
-            (_a, event) => this._onBackdropPress(event));
+            this._pointerSignal('backdrop press', this._onBackdropPress));
         this._backdrop.connect('motion-event',
-            (_a, event) => this._updateDrag(event));
+            dragMotion);
         this._backdrop.connect('button-release-event',
-            (_a, event) => this._finishDrag(event));
+            dragRelease);
         this._panel.connect('motion-event',
-            (_a, event) => this._updateDrag(event));
+            dragMotion);
         this._panel.connect('button-release-event',
-            (_a, event) => this._finishDrag(event));
+            dragRelease);
 
-        this._rebuild();
+        if (!this._rebuild())
+            return;
 
         const [, natH] = this._panel.get_preferred_height(width);
         let gx, gy;
@@ -495,90 +500,66 @@ export class Popup {
             this.hide('grab-failed');
             return;
         }
-        modalPushed = true;
         this._visible = true;
         log.debug(`[popup]: show placement=${placement} movable=${movable ? 'yes' : 'no'} position=${Math.round(lx)},${Math.round(ly)} size=${width}x${Math.round(natH)}`);
         global.stage.set_key_focus(this._backdrop);
         } catch (e) {
-            log.warn(`popup show failed: ${e.message}`);
-            this._cleanupAfterFailedShow(modalPushed);
+            log.error('popup show failed', e);
+            this.hide('show-failed');
         }
+    }
+
+    _pointerSignal(stage, handle, scope = this._view) {
+        const view = this._view;
+        return scope.onSignal(`[popup]: ${stage}`, (_actor, event) => {
+            if (this._view !== view || (scope !== view && scope !== this._itemMenuActions))
+                return Clutter.EVENT_STOP;
+            try {
+                return handle.call(this, event);
+            } catch (error) {
+                log.error(`[popup]: ${stage}`, error);
+                if (this._view === view)
+                    cleanupPopupStep('failed pointer event', () => this.hide('pointer-error'));
+                return Clutter.EVENT_STOP;
+            }
+        }, Clutter.EVENT_STOP);
+    }
+
+    retireView() {
+        const view = this._view;
+        this._view = null;
+        cleanupPopupStep('item menu actions', () => this._itemMenuActions?.close());
+        view?.close();
     }
 
     hide(reason = 'programmatic') {
-        if (this._visible || this._backdrop)
+        const grab = this._grab;
+        const backdrop = this._backdrop;
+        if (this._visible || backdrop)
             log.debug(`[popup]: hide reason=${reason}`);
-        this._clearNumberPick();
-        this._disarmClear();
-        this._clearSaveHint();
-        this._clearItemContextMenu();
-        if (this._grab) {
-            try {
-                Main.popModal(this._grab);
-            } catch (e) {
-                log.warn(`popup modal release failed: ${e.message}`);
-            }
-            this._grab = null;
-        }
-        if (this._backdrop) {
-            try {
-                this._backdrop.destroy();
-            } catch (e) {
-                log.warn(`popup destroy failed: ${e.message}`);
-            }
-            this._backdrop = null;
-        }
-        this._panel = null;
-        this._entry = null;
-        this._hint = null;
-        this._scrollView = null;
-        this._listBox = null;
-        this._itemMenu = null;
-        this._dragHandle = null;
-        this._rows = [];
-        this._selected = -1;
-        this._targetWindow = null;
-        this._anchorActor = null;
-        this._clearBtn = null;
-        this._drag = null;
-        this._moveBounds = null;
-        this._popupTheme = 'dark';
-        this._visible = false;
-    }
-
-    _cleanupAfterFailedShow(modalPushed) {
-        if (modalPushed && this._grab) {
-            try {
-                Main.popModal(this._grab);
-            } catch (e) {
-                log.warn(`popup modal cleanup failed: ${e.message}`);
-            }
-        }
+        cleanupPopupStep('view', () => this.retireView());
         this._grab = null;
-        this._clearNumberPick();
-        this._disarmClear();
-        this._clearSaveHint();
-        this._clearItemContextMenu();
-        if (this._backdrop) {
-            try {
-                this._backdrop.destroy();
-            } catch (e) {
-                log.warn(`popup failed-show destroy failed: ${e.message}`);
-            }
-        }
         this._backdrop = null;
+        this._hint = null;
+        this._clearBtn = null;
+        cleanupPopupStep('number pick', () => this._resetNumberPickState());
+        cleanupPopupStep('clear confirmation', () => this._disarmClear());
+        cleanupPopupStep('save hint', () => this._clearSaveHint());
+        cleanupPopupStep('item menu', () => this._clearItemContextMenu());
+        if (grab)
+            cleanupPopupStep('modal release', () => Main.popModal(grab));
+        removePopupActor('backdrop', backdrop);
+
         this._panel = null;
         this._entry = null;
-        this._hint = null;
         this._scrollView = null;
         this._listBox = null;
         this._itemMenu = null;
         this._dragHandle = null;
         this._rows = [];
         this._selected = -1;
-        this._targetWindow = null;
+        this._targetWindowId = null;
         this._anchorActor = null;
-        this._clearBtn = null;
         this._drag = null;
         this._moveBounds = null;
         this._popupTheme = 'dark';
@@ -609,7 +590,7 @@ export class Popup {
     _startDrag(event) {
         if (!this._panel || !this._moveBounds)
             return Clutter.EVENT_PROPAGATE;
-        const coords = eventCoords(event);
+        const coords = event?.get_coords();
         if (!coords)
             return Clutter.EVENT_STOP;
         const [stageX, stageY] = coords;
@@ -624,7 +605,7 @@ export class Popup {
     _updateDrag(event) {
         if (!this._drag)
             return Clutter.EVENT_PROPAGATE;
-        const coords = eventCoords(event);
+        const coords = event?.get_coords();
         if (!coords)
             return Clutter.EVENT_STOP;
         const [stageX, stageY] = coords;
@@ -652,21 +633,25 @@ export class Popup {
         // Two-step confirm. We already hold a modal grab, so opening a separate confirm
         // dialog would mean nesting grabs; instead the first click arms + relabels the
         // button and the second click (within 3s) actually clears.
+        if (!this._view)
+            return;
         if (!this._clearArmed) {
+            this._cancelClearConfirmTimeout = this._view.after('popup clear confirmation', 3000, () => {
+                this._cancelClearConfirmTimeout = null;
+                this._disarmClear();
+            });
+            if (!this._cancelClearConfirmTimeout)
+                return;
             this._clearArmed = true;
-            if (this._clearBtn) {
-                this._clearBtn.add_style_class_name('cg-clear-armed');
-                this._clearBtn.label = 'Click again to clear all';
+            try {
+                if (this._clearBtn) {
+                    this._clearBtn.add_style_class_name('cg-clear-armed');
+                    this._clearBtn.label = 'Click again to clear all';
+                }
+            } catch (error) {
+                log.error('[popup]: show clear confirmation', error);
+                this._disarmClear();
             }
-            if (this._clearConfirmTimer) {
-                try { GLib.Source.remove(this._clearConfirmTimer); } catch (e) {}
-            }
-            this._clearConfirmTimer = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT, 3000, () => {
-                    this._clearConfirmTimer = 0;
-                    this._disarmClear();
-                    return GLib.SOURCE_REMOVE;
-                });
             return;
         }
 
@@ -676,7 +661,7 @@ export class Popup {
         try {
             this._onClear();
         } catch (e) {
-            log.warn(`popup clear failed: ${e.message}`);
+            log.error('popup clear failed', e);
         } finally {
             this._localHistoryMutation = false;
         }
@@ -687,47 +672,47 @@ export class Popup {
 
     _disarmClear() {
         this._clearArmed = false;
-        if (this._clearConfirmTimer) {
-            try {
-                GLib.Source.remove(this._clearConfirmTimer);
-            } catch (e) {
-                log.debug(`clear confirm cleanup failed: ${e.message}`);
-            }
-            this._clearConfirmTimer = 0;
-        }
+        const cancel = this._cancelClearConfirmTimeout;
+        this._cancelClearConfirmTimeout = null;
+        cancel?.();
         if (this._clearBtn) {
             try {
                 this._clearBtn.remove_style_class_name('cg-clear-armed');
                 this._clearBtn.label = 'Clear history';
             } catch (e) {
-                // button already destroyed during teardown; nothing to reset
+                log.error('[popup]: reset clear confirmation', e);
             }
         }
     }
 
     _rebuild() {
-        if (!this._entry || !this._listBox)
-            return;
-        const query = this._entry.get_text();
+        const view = this._view;
+        if (!view)
+            return false;
+        try {
+            const query = this._entry.get_text();
+            const items = this._getItems().filter(rec => matches(rec, query));
+            this._replaceRows(items, query);
+            return this._view === view;
+        } catch (error) {
+            log.error('popup search rebuild failed', error);
+            if (this._view === view)
+                this.hide('search-rebuild-failed');
+            return false;
+        }
+    }
+
+    _replaceRows(items, query) {
+        this._rows = [];
+        this._selected = -1;
         this._clearItemContextMenu();
         this._listBox.destroy_all_children();
-        this._rows = [];
-
-        let items = [];
-        try {
-            // Render every matching entry. History is bounded by `history.maxItems` and may
-            // be trimmed further by the store's snapshot hard cap; the list itself scrolls.
-            items = this._getItems().filter(r => matches(r, query));
-        } catch (e) {
-            log.warn(`popup rebuild failed: ${e.message}`);
-        }
         if (items.length === 0) {
             // (no matches) only when a search filtered everything out; otherwise the
             // history is genuinely empty.
             const text = query ? '(no matches)' : '(empty)';
             const empty = new St.Label({ text, style_class: 'cg-empty' });
             this._listBox.add_child(empty);
-            this._selected = -1;
             return;
         }
 
@@ -753,25 +738,33 @@ export class Popup {
             // deliberately does NOT move the keyboard selection, so a mouse resting near the
             // list can't fight arrow-key / number navigation. Use button-press-event to keep
             // primary/secondary click semantics explicit for the future context menu.
-            button.connect('button-press-event', (_actor, event) => {
-                const pointerButton = eventButton(event);
-                if (pointerButton !== Clutter.BUTTON_PRIMARY) {
-                    if (pointerButton === Clutter.BUTTON_SECONDARY) {
-                        this._select(i);
-                        this._showItemContextMenu(rec, button, event);
-                    }
-                    return Clutter.EVENT_STOP;
-                }
-                this._clearItemContextMenu();
-                this._select(i);
-                this._activate(rec);
-                return Clutter.EVENT_STOP;
-            });
+            button.connect('button-press-event', (actor, event) => this._onRowPress(i, actor, event));
             this._listBox.add_child(button);
             this._rows.push({ rec, button });
         });
 
         this._select(0);
+    }
+
+    _onRowPress(i, button, event) {
+        const row = this._rows[i];
+        if (!this._view || row?.button !== button)
+            return Clutter.EVENT_STOP;
+        try {
+            const which = event.get_button();
+            if (which === Clutter.BUTTON_SECONDARY) {
+                this._select(i);
+                this._showItemContextMenu(row.rec, button, event);
+            } else if (which === Clutter.BUTTON_PRIMARY) {
+                this._clearItemContextMenu();
+                this._select(i);
+                this._activate(row.rec);
+            }
+        } catch (error) {
+            log.error('popup row button-press-event', error);
+            this._clearItemContextMenu();
+        }
+        return Clutter.EVENT_STOP;
     }
 
     _itemMenuButton(label, action, styleClass = '') {
@@ -781,17 +774,11 @@ export class Popup {
             can_focus: false,
             x_expand: true,
         });
-        button.connect('button-press-event', (_actor, event) => {
-            if (eventButton(event) !== Clutter.BUTTON_PRIMARY)
-                return Clutter.EVENT_STOP;
-            try {
+        button.connect('button-press-event', this._pointerSignal('item menu action', event => {
+            if (event.get_button() === Clutter.BUTTON_PRIMARY)
                 action();
-            } catch (e) {
-                log.warn(`popup item menu action failed: ${e.message}`);
-                this._clearItemContextMenu();
-            }
             return Clutter.EVENT_STOP;
-        });
+        }, this._itemMenuActions));
         return button;
     }
 
@@ -808,6 +795,8 @@ export class Popup {
             reactive: true,
             can_focus: false,
         });
+        this._itemMenu = menu;
+        this._itemMenuActions = new Completions();
         menu.add_child(this._itemMenuButton('Paste', () => this._activate(rec)));
         if (rec.kind !== 'file') {
             menu.add_child(this._itemMenuButton('Save as',
@@ -822,7 +811,6 @@ export class Popup {
         menu.add_child(this._itemMenuButton('Remove', () => this._removeItem(rec),
             'cg-item-menu-danger'));
         this._backdrop.add_child(menu);
-        this._itemMenu = menu;
 
         this._positionItemContextMenu(menu, rowButton, event);
         log.debug(`[popup]: item context menu opened recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'}`);
@@ -832,7 +820,7 @@ export class Popup {
         const margin = 6;
         let x = margin;
         let y = margin;
-        const coords = eventCoords(event);
+        const coords = event?.get_coords();
 
         try {
             const [backdropX, backdropY] = this._backdrop.get_transformed_position();
@@ -856,20 +844,18 @@ export class Popup {
             menu.set_position(Math.round(clamp(x, margin, maxX)),
                 Math.round(clamp(y, margin, maxY)));
         } catch (e) {
-            log.debug(`popup item menu position failed: ${e.message}`);
+            log.debug('popup item menu position failed', e);
             menu.set_position(x, y);
         }
     }
 
     _clearItemContextMenu() {
-        if (!this._itemMenu)
-            return;
-        try {
-            this._itemMenu.destroy();
-        } catch (e) {
-            log.debug(`popup item menu cleanup failed: ${e.message}`);
-        }
+        const menu = this._itemMenu;
+        const actions = this._itemMenuActions;
         this._itemMenu = null;
+        this._itemMenuActions = null;
+        cleanupPopupStep('item menu actions', () => actions?.close());
+        removePopupActor('item menu', menu);
     }
 
     _saveItemAs(rec) {
@@ -881,7 +867,7 @@ export class Popup {
         try {
             this._onSaveRecord(rec);
         } catch (e) {
-            log.warn(`popup save as failed: ${e.message}`);
+            log.error('popup save as failed', e);
         }
     }
 
@@ -891,12 +877,12 @@ export class Popup {
         // the inline hint here; when something exists the handler hides the popup itself
         // before the file manager takes focus.
         log.debug(`[popup]: reveal selected recordId=${rec?.id ?? '(none)'} kind=${rec?.kind ?? '(none)'}`);
-        Promise.resolve(this._onRevealFile(rec))
-            .then(result => {
-                if (result?.status === 'missing' && this._visible)
-                    this._showSaveHint('File not found', true);
-            })
-            .catch(e => log.warn(`popup reveal failed: ${e.message}`));
+        try {
+            if (this._view)
+                this._onRevealFile(rec, this._view, () => this._showSaveHint('File not found', true));
+        } catch (error) {
+            log.error('popup reveal failed', error);
+        }
     }
 
     _removeItem(rec) {
@@ -912,7 +898,7 @@ export class Popup {
             this._onRemove(rec);
             log.debug(`[popup]: item removed recordId=${recordId}`);
         } catch (e) {
-            log.warn(`popup item remove failed recordId=${recordId}: ${e.message}`);
+            log.error(`popup item remove failed recordId=${recordId}`, e);
         } finally {
             this._localHistoryMutation = false;
         }
@@ -934,13 +920,14 @@ export class Popup {
         try {
             ensureActorVisibleInScrollView(this._scrollView, this._rows[this._selected].button);
         } catch (e) {
-            log.debug(`scroll selected row failed: ${e.message}`);
+            log.debug('scroll selected row failed', e);
         }
     }
 
     _showNumberHint(text, warning = false) {
         if (!this._hint)
             return;
+        const version = ++this._hintVersion;
         // Empty text restores the always-on cheat sheet rather than hiding the row.
         if (warning)
             this._hint.add_style_class_name('cg-number-hint-warning');
@@ -948,6 +935,7 @@ export class Popup {
             this._hint.remove_style_class_name('cg-number-hint-warning');
         this._hint.set_text(text === '' ? this._defaultHintText() : text);
         this._hint.visible = true;
+        return version;
     }
 
     _defaultHintText() {
@@ -966,13 +954,6 @@ export class Popup {
         this._showNumberHint('');
     }
 
-    _refreshHintSoon() {
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            this._showNumberHint('');
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
     _activateRow(i) {
         if (i < 0 || i >= this._rows.length)
             return;
@@ -981,44 +962,53 @@ export class Popup {
     }
 
     _activate(rec) {
-        const targetWindow = this._targetWindow;
+        const windowId = this._targetWindowId;
         this._clearItemContextMenu();
         this.hide('activate');
-        this._onActivate(rec, targetWindow);
+        this._onActivate(rec, windowId);
+    }
+
+    _cancelNumberPick() {
+        const cancel = this._cancelNumberPickTimeout;
+        this._cancelNumberPickTimeout = null;
+        cancel?.();
+    }
+
+    _resetNumberPickState() {
+        this._numberPickBuffer = '';
+        this._numberPickRecordId = null;
+        this._cancelNumberPick();
     }
 
     _clearNumberPick() {
-        if (this._numberPickTimer) {
-            try {
-                GLib.Source.remove(this._numberPickTimer);
-            } catch (e) {
-                log.debug(`number pick cleanup failed: ${e.message}`);
-            }
-            this._numberPickTimer = 0;
-        }
-        this._numberPickBuffer = '';
+        this._resetNumberPickState();
         this._showNumberHint('');
     }
 
     _clearSaveHint() {
-        if (!this._saveHintTimer)
-            return;
-        try {
-            GLib.Source.remove(this._saveHintTimer);
-        } catch (e) {
-            log.debug(`save hint cleanup failed: ${e.message}`);
-        }
-        this._saveHintTimer = 0;
+        const cancel = this._cancelSaveHintTimeout;
+        this._cancelSaveHintTimeout = null;
+        cancel?.();
     }
 
     _showSaveHint(text, warning = false) {
         this._clearSaveHint();
-        this._showNumberHint(text, warning);
-        this._saveHintTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
-            this._saveHintTimer = 0;
-            this._showNumberHint('');
-            return GLib.SOURCE_REMOVE;
+        let version;
+        const cancel = this._view?.after('popup save hint', 1500, () => {
+            this._cancelSaveHintTimeout = null;
+            if (this._hintVersion === version)
+                this._showNumberHint('');
         });
+        if (!cancel)
+            return;
+        this._cancelSaveHintTimeout = cancel;
+        try {
+            version = this._showNumberHint(text, warning);
+        } catch (error) {
+            log.error('[popup]: show save hint', error);
+            if (this._cancelSaveHintTimeout === cancel)
+                this._clearSaveHint();
+        }
     }
 
     _saveHintForStatus(status) {
@@ -1027,19 +1017,23 @@ export class Popup {
                 return { text: 'History saved', warning: false };
             case 'busy':
                 return { text: 'Save already in progress', warning: true };
-            case 'failed':
-                return { text: 'History save failed', warning: true };
             case 'idle':
-            default:
                 return { text: 'History already saved', warning: false };
+            default:
+                return { text: 'History save failed', warning: true };
         }
     }
 
     _commitNumberPick() {
-        const n = parseInt(this._numberPickBuffer, 10);
+        const id = this._numberPickRecordId;
         this._clearNumberPick();
-        if (n >= 1)
-            this._activateRow(n - 1);
+        if (id === null)
+            return;
+        const row = this._rows.find(item => item.rec.id === id);
+        if (row)
+            this._activate(row.rec);
+        else
+            log.debug(`[popup]: number pick cancelled reason=record-removed recordId=${id}`);
     }
 
     _previewNumberPick(n) {
@@ -1051,74 +1045,38 @@ export class Popup {
         }
     }
 
+    _updateNumberPick(digits) {
+        this._cancelNumberPick();
+        this._numberPickBuffer = digits;
+        const n = parseInt(digits, 10);
+        this._numberPickRecordId = this._rows[n - 1]?.rec.id ?? null;
+        if (!digits) {
+            this._showNumberHint('');
+            return;
+        }
+
+        this._previewNumberPick(n);
+        if (this._numberPickRecordId !== null) {
+            this._cancelNumberPickTimeout = this._view?.after('popup number pick', this._numberPickTimeoutMs, () => {
+                this._cancelNumberPickTimeout = null;
+                this._commitNumberPick();
+            });
+        }
+    }
+
     _onNumberPickDigit(digit) {
         if (this._numberPickBuffer === '' && digit === '0') {
             this._showNumberHint('Row 10');
             this._activateRow(9);
             return;
         }
-
-        if (this._numberPickTimer) {
-            try {
-                GLib.Source.remove(this._numberPickTimer);
-            } catch (e) {
-                log.debug(`number pick cleanup failed: ${e.message}`);
-            }
-            this._numberPickTimer = 0;
-        }
-
-        this._numberPickBuffer += digit;
-        const n = parseInt(this._numberPickBuffer, 10);
-        const exact = n >= 1 && n <= this._rows.length;
-        this._previewNumberPick(n);
-
-        if (!exact)
-            return;
-
-        this._numberPickTimer = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            this._numberPickTimeoutMs,
-            () => {
-                this._numberPickTimer = 0;
-                this._commitNumberPick();
-                return GLib.SOURCE_REMOVE;
-            });
+        this._updateNumberPick(this._numberPickBuffer + digit);
     }
 
     _onNumberPickBackspace() {
         if (this._numberPickBuffer === '')
             return false;
-
-        if (this._numberPickTimer) {
-            try {
-                GLib.Source.remove(this._numberPickTimer);
-            } catch (e) {
-                log.debug(`number pick cleanup failed: ${e.message}`);
-            }
-            this._numberPickTimer = 0;
-        }
-
-        this._numberPickBuffer = this._numberPickBuffer.slice(0, -1);
-        if (this._numberPickBuffer === '') {
-            this._showNumberHint('');
-            return true;
-        }
-
-        const n = parseInt(this._numberPickBuffer, 10);
-        const exact = n >= 1 && n <= this._rows.length;
-        this._previewNumberPick(n);
-
-        if (exact) {
-            this._numberPickTimer = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT,
-                this._numberPickTimeoutMs,
-                () => {
-                    this._numberPickTimer = 0;
-                    this._commitNumberPick();
-                    return GLib.SOURCE_REMOVE;
-                });
-        }
-
+        this._updateNumberPick(this._numberPickBuffer.slice(0, -1));
         return true;
     }
 
@@ -1180,34 +1138,49 @@ export class Popup {
     }
 
     _onKey(event) {
+        try {
+            return this._handleKeyPress(event);
+        } catch (error) {
+            log.error('[popup]: key-press-event', error);
+            cleanupPopupStep('number pick after key error', () => this._resetNumberPickState());
+            return Clutter.EVENT_STOP;
+        }
+    }
+
+    _handleKeyPress(event) {
         if (!this._entry)
             return Clutter.EVENT_STOP;
         const sym = event.get_key_symbol();
-        const searchFocused = this._isSearchFocused();
 
         if (this._isCtrlF(event, sym)) {
             this._focusSearch();
             return Clutter.EVENT_STOP;
         }
         if (this._isCtrlS(event, sym)) {
-            this._clearNumberPick();
-            Promise.resolve(this._onSave())
-                .then(status => {
-                    if (this._visible) {
-                        const hint = this._saveHintForStatus(status);
-                        this._showSaveHint(hint.text, hint.warning);
-                    }
-                })
-                .catch(e => {
-                    log.warn(`popup save failed: ${e.message}`);
-                    if (this._visible)
-                        this._showSaveHint('History save failed', true);
-                });
+            cleanupPopupStep('pre-save number pick', () => this._resetNumberPickState());
+            cleanupPopupStep('pre-save hint', () => this._showNumberHint(''));
+            const view = this._view;
+            const version = this._hintVersion;
+            const showResult = status => {
+                if (!view || view !== this._view || version !== this._hintVersion) {
+                    log.debug('[popup]: skipped superseded save hint');
+                    return;
+                }
+                const hint = this._saveHintForStatus(status);
+                this._showSaveHint(hint.text, hint.warning);
+            };
+            try {
+                view?.add('popup save', this._onSave(), result => showResult(result.ok ? result.value : 'failed'));
+            } catch (error) {
+                log.error('popup save failed', error);
+                showResult('failed');
+            }
             return Clutter.EVENT_STOP;
         }
 
         // Plain character shortcuts are active only outside the search box. Once search is
         // focused, '/', 'j', and 'k' are ordinary query text.
+        const searchFocused = this._isSearchFocused();
         if (!searchFocused && !this._hasCommandModifier(event)) {
             if (sym === Clutter.KEY_slash) {
                 this._focusSearch();

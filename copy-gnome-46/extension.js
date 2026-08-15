@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -8,7 +9,9 @@ import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
 import { log, setLevel } from './core/log.js';
 import { Paths } from './core/paths.js';
-import { loadConfig } from './core/config.js';
+import { DEFAULTS } from './core/config.js';
+import { readConfigSnapshot } from './core/config-reader.js';
+import { Completions } from './core/completions.js';
 import { byteLength, encodeUtf8 } from './core/utf8.js';
 import { Store } from './core/store.js';
 import { History } from './core/history.js';
@@ -17,7 +20,7 @@ import { DBusTransport } from './core/ipc.js';
 import { defaultSaveName, savePlan, saveFileDialog, uriDisplayPath, writeBytesToUri } from './core/save.js';
 import { partitionExistingUris, showInFileManager } from './core/reveal.js';
 import * as Clipboard from './core/clipboard.js';
-import { paste, resetPaste } from './core/paste.js';
+import { findPasteWindow, resetPaste, schedulePaste } from './core/paste.js';
 import {
     HTML_MIME,
     PLAIN_TEXT_MIME,
@@ -128,7 +131,7 @@ function filePathText(uriList) {
         try {
             paths.push(decodeURIComponent(pathPart));
         } catch (e) {
-            log.debug(`[restore]: file path decode failed uri="${debugValue(line)}" reason=${e.message}`);
+            log.debug(`[restore]: file path decode failed uri="${debugValue(line)}"`, e);
         }
     }
     return paths.join('\n');
@@ -140,55 +143,88 @@ function recordMatchesDrop(rec, drop) {
     return recordComparableValue(rec) === drop.value;
 }
 
+function reportTrim(send) {
+    return (records, gen) => send({ ids: records.map(record => record.id), gen });
+}
+
+async function clipboardTextReply(scope) {
+    const text = await Clipboard.getText(scope);
+    return { ok: true, hasText: text != null, text: text ?? '' };
+}
+
 export default class CopyGnomeExtension extends Extension {
     enable() {
+        log.info('enabling');
         this._enabled = true;
+        this._ready = false;
         this._timers = new Set();
         this._keys = [];
         this._notificationSource = null;
+        this._work = new Completions();
+        this._clipboardReads = new Clipboard.ClipboardReadScope();
+        this._configPending = false;
 
-        this._paths = new Paths().resolve();
-        this._config = loadConfig(this._paths.config);
-        setLevel(this._config.logging.level);
-        this._settings = this.getSettings();
+        try {
+            this._paths = new Paths().resolve();
+            const { work, cancel } = readConfigSnapshot(this._paths.config);
+            this._work.add('startup config', work, result => this._openHistory(result.value), cancel);
+        } catch (error) {
+            this._startupFailed(error);
+        }
+    }
 
-        this._store = new Store({
-            dataDir: this._paths.data,
-            // Only sync the trimmed set back if History hasn't changed since the snapshot was
-            // taken; otherwise a capture that landed mid-flush would be dropped from memory.
-            // The newer pending snapshot will be flushed and re-trimmed, converging safely.
-            onTrim: (records, gen) => {
-                if (this._history && this._history.gen === gen)
-                    this._history.trimTo(records);
-            },
-            onNewDailyFile: name => this._sweepOldFiles(`new daily file ${name}`, { retryIfBusy: true }),
-        });
-        this._history = new History({
-            opts: this._config.history,
-            store: this._store,
-            onChange: () => this._onHistoryChange(),
-        });
-        this._ready = false;
-        this._store.open()
-            .then(records => {
-                if (!this._enabled || !this._history) return;
-                this._history.load(records);
-                this._ready = true;
-                this._startRuntime();
-            })
-            .catch(e => {
-                if (!this._enabled) return;
-                log.error(`store open failed: ${e.message}`);
-                this._history?.load([]);
-                this._ready = true;
-                this._startRuntime();
+    _openHistory(config) {
+        try {
+            if (!config)
+                log.warn('startup config unavailable; using defaults');
+            this._config = config ?? JSON.parse(JSON.stringify(DEFAULTS));
+            setLevel(this._config.logging.level);
+            this._settings = this.getSettings();
+            const runtime = this._work;
+            const trim = runtime.listen('history trim', ({ ids, gen }) => {
+                if (this._history?.gen === gen) {
+                    const retained = new Set(ids);
+                    this._history.trimTo(this._history.list().filter(record => retained.has(record.id)));
+                }
             });
+            this._store = new Store({
+                dataDir: this._paths.data,
+                onTrim: reportTrim(trim),
+                onNewDailyFile: runtime.listen('new daily file', name =>
+                    this._sweepOldFiles(`new daily file ${name}`, { retryIfBusy: true })),
+            });
+            this._history = new History({
+                opts: this._config.history,
+                store: this._store,
+                onChange: () => this._onHistoryChange(),
+            });
+            runtime.add('history open', this._store.open(), result => this._finishStartup(result));
+        } catch (error) {
+            this._startupFailed(error);
+        }
+    }
+
+    _finishStartup(result) {
+        try {
+            if (!result.ok)
+                log.warn('history unavailable; starting with empty history');
+            this._history.load(result.ok ? result.value : []);
+            this._startRuntime();
+            this._ready = true;
+        } catch (error) {
+            this._startupFailed(error);
+        }
+    }
+
+    _startupFailed(error) {
+        log.error('runtime startup failed', error);
+        this.disable();
     }
 
     // If startup recovered non-empty history from an older day's file that has already
-    // reached history.maxAgeDays (today's file didn't exist yet, see
-    // Store._pickStartupFileName), that file is due to be deleted by the very next retention
-    // sweep. Give the recovered snapshot a durable copy in today's file first, so the sweep
+    // reached history.maxAgeDays (today had no readable snapshot),
+    // that file is approaching the retention sweep's deletion window.
+    // Give the recovered snapshot a durable copy in today's file first, so the sweep
     // can never be the only thing standing between "loaded into memory" and "gone for good" -
     // see docs/04-storage/lifecycle.md. No-op when startup used today's own file, found
     // nothing, failed to load, or the recovered file is younger than maxAgeDays (an ordinary
@@ -197,23 +233,16 @@ export default class CopyGnomeExtension extends Extension {
     // logged and does not throw; called from _startRuntime() without blocking feature bring-up
     // (see the retention-sweep block below), so a stuck write here cannot delay the monitor,
     // popup, indicator, keybindings, or IPC coming up.
-    async _rehomeRecoveredSnapshot() {
+    _rehomeRecoveredSnapshot() {
         if (!this._store?.recoveredFromOlderFile)
-            return;
-        const maxAgeDays = this._config?.history?.maxAgeDays ?? 0;
-        const ageDays = this._store?.recoveredFileAgeDays;
-        if (!(maxAgeDays > 0) || !Number.isInteger(ageDays) || ageDays < maxAgeDays) {
-            log.debug(`[store]: recovered history ageDays=${ageDays} is younger than maxAgeDays=${maxAgeDays}; leaving it for a later copy to re-home`);
-            return;
-        }
-        log.info(`[store]: recovered history ageDays=${ageDays} has reached maxAgeDays=${maxAgeDays}; re-homing to today's file before the sweep runs`);
-        this._history?.persistSnapshot();
-        try {
-            const status = await this._store?.flush() ?? 'idle';
-            log.info(`[store]: recovered history re-homed to today's file status=${status}`);
-        } catch (e) {
-            log.warn(`[store]: recovered history re-home failed: ${e.message}`);
-        }
+            return null;
+        const maxAgeDays = this._config.history.maxAgeDays;
+        const ageDays = this._store.recoveredFileAgeDays;
+        if (!(maxAgeDays > 0) || !Number.isInteger(ageDays) || ageDays < maxAgeDays)
+            return null;
+        log.info(`[store]: recovered history ageDays=${ageDays}; re-homing before retention`);
+        this._history.persistSnapshot();
+        return this._store.flush();
     }
 
     _startRuntime() {
@@ -234,12 +263,12 @@ export default class CopyGnomeExtension extends Extension {
 
         this._popup = new Popup({
             getItems: () => this._history.list(),
-            onActivate: (rec, targetWindow, opts) => this._restore(rec, targetWindow, opts),
+            onActivate: (rec, windowId, opts) => this._restore(rec, windowId, opts),
             onRemove: rec => this._history.remove(rec.id),
             onClear: () => this._history.clear(),
             onSave: () => this._flushFromPopup(),
             onSaveRecord: rec => this._saveRecord(rec),
-            onRevealFile: rec => this._revealFile(rec),
+            onRevealFile: (rec, view, onMissing) => this._revealFile(rec, view, onMissing),
             getUi: () => this._uiConfig(),
         });
 
@@ -261,36 +290,22 @@ export default class CopyGnomeExtension extends Extension {
 
         // Periodic guaranteed flush; Ctrl+S in the popup can also flush on demand.
         const sec = Math.max(5, this._config.storage.flushIntervalSec);
-        this._flushTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sec, () => {
-            this._store.flush().catch(e => log.warn(`periodic flush: ${e.message}`));
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._work.addTimer('periodic flush', sec, () => this._store.flush());
 
-        // Retention sweep: delete daily clips-*.jsonl files older than maxAgeDays. It starts
-        // only here, after store.open() + history.load() have populated the in-memory model,
-        // runs periodically, and also runs after a successful first append to a new daily file.
-        // It never runs from disable()/teardown. The sweep is fail-closed and never touches the
-        // in-memory history; deleting even the just-loaded old file is safe because memory is
-        // the session source of truth and _rehomeRecoveredSnapshot() (below) already re-homes a
-        // recovered snapshot to today's file before either the startup or the first periodic
-        // sweep can run against it - both wait on the same _startupRehomeDone promise, so a
-        // short-interval cleanupIntervalSec cannot race a still-in-flight re-home. Feature
-        // bring-up above (monitor/popup/indicator/keybindings) does not wait for any of this.
         const maxAgeDays = this._config.history.maxAgeDays;
         if (maxAgeDays > 0) {
-            this._startupRehomeDone = this._rehomeRecoveredSnapshot()
-                .catch(e => log.warn(`[store]: recovered history re-home failed: ${e.message}`))
-                .finally(() => {
-                    if (this._enabled)
-                        this._sweepOldFiles('startup');
-                });
+            const rehome = this._rehomeRecoveredSnapshot();
+            this._startupRehomePending = true;
+            this._work.add('startup retention', rehome, result => {
+                this._startupRehomePending = false;
+                if (rehome)
+                    log.info(`[store]: recovered history re-home status=${result.value ?? 'failed'}`);
+                this._sweepOldFiles('startup');
+            });
             const sweepSec = Math.max(15, this._config.history.cleanupIntervalSec);
-            this._cleanupTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, sweepSec, () => {
-                this._startupRehomeDone.finally(() => {
-                    if (this._enabled)
-                        this._sweepOldFiles('timer');
-                });
-                return GLib.SOURCE_CONTINUE;
+            this._work.addTimer('periodic retention', sweepSec, () => {
+                if (!this._startupRehomePending)
+                    return this._sweepOldFiles('timer');
             });
         }
 
@@ -312,84 +327,82 @@ export default class CopyGnomeExtension extends Extension {
             }
             if (reason.startsWith('new daily file'))
                 log.info(`cleanup requested reason=${reason} maxAgeDays=${maxAgeDays}`);
-            this._store?.sweepOldFiles(maxAgeDays, opts)
-                .catch(e => log.error(`cleanup ${reason}: ${e.message}`));
+            return this._store?.sweepOldFiles(maxAgeDays, opts)
+                .catch(e => log.error(`cleanup ${reason}`, e));
         } catch (e) {
-            log.error(`cleanup ${reason}: ${e.message}`);
+            log.error(`cleanup ${reason}`, e);
         }
     }
 
     disable() {
+        log.info('disabling');
         this._enabled = false;
-        for (const name of this._keys) {
+        this._ready = false;
+        try {
+            this._indicator?.retire();
+        } catch (error) {
+            log.error('indicator retirement failed', error);
+        }
+        const timers = [...(this._timers ?? [])];
+        this._timers?.clear();
+        const work = this._work;
+        this._work = null;
+        work?.close();
+        this._clipboardReads?.close();
+        this._clipboardReads = null;
+        this._popup?.retireView();
+        for (const name of this._keys ?? []) {
             try {
                 Main.wm.removeKeybinding(name);
             } catch (e) {
-                log.warn(`remove keybinding ${name}: ${e.message}`);
+                log.error(`remove keybinding ${name}`, e);
             }
         }
         this._keys = [];
 
-        if (this._flushTimer) {
-            try {
-                GLib.Source.remove(this._flushTimer);
-            } catch (e) {
-                log.warn(`flush timer cleanup failed: ${e.message}`);
-            }
-            this._flushTimer = 0;
-        }
-        if (this._cleanupTimer) {
-            try {
-                GLib.Source.remove(this._cleanupTimer);
-            } catch (e) {
-                log.warn(`cleanup timer cleanup failed: ${e.message}`);
-            }
-            this._cleanupTimer = 0;
-        }
-        for (const id of this._timers) {
+        for (const id of timers) {
             try {
                 GLib.Source.remove(id);
             } catch (e) {
-                log.warn(`timer cleanup failed: ${e.message}`);
+                log.error('timer cleanup failed', e);
             }
         }
-        this._timers.clear();
 
         try {
             this._ipc?.stop();
         } catch (e) {
-            log.warn(`ipc stop failed: ${e.message}`);
+            log.error('ipc stop failed', e);
         }
         try {
             this._monitor?.stop();
         } catch (e) {
-            log.warn(`monitor stop failed: ${e.message}`);
+            log.error('monitor stop failed', e);
         }
         try {
             this._popup?.hide();
         } catch (e) {
-            log.warn(`popup hide failed: ${e.message}`);
+            log.error('popup hide failed', e);
         }
         try {
             this._indicator?.destroy();
         } catch (e) {
-            log.warn(`indicator destroy failed: ${e.message}`);
+            log.error('indicator destroy failed', e);
         }
         try {
             this._notificationSource?.destroy?.();
         } catch (e) {
-            log.warn(`notification source destroy failed: ${e.message}`);
+            log.error('notification source destroy failed', e);
         }
 
         try {
-            this._store?.closeSync();
+            this._store?.close();
         } catch (e) {
-            log.warn(`store close failed: ${e.message}`);
+            log.error('store close failed', e);
         }
         try {
             resetPaste();
         } catch (e) {
-            log.warn(`paste reset failed: ${e.message}`);
+            log.error('paste reset failed', e);
         }
 
         this._ipc = null;
@@ -401,7 +414,7 @@ export default class CopyGnomeExtension extends Extension {
         this._settings = null;
         this._config = null;
         this._notificationSource = null;
-        this._startupRehomeDone = null;
+        this._startupRehomePending = false;
 
         log.info('disabled');
     }
@@ -416,12 +429,12 @@ export default class CopyGnomeExtension extends Extension {
                         if (this._enabled)
                             handler();
                     } catch (e) {
-                        log.warn(`keybinding ${name} failed: ${e.message}`);
+                        log.error(`keybinding ${name} failed`, e);
                     }
                 });
             this._keys.push(name);
         } catch (e) {
-            log.warn(`add keybinding ${name}: ${e.message}`);
+            log.error(`add keybinding ${name}`, e);
         }
     }
 
@@ -448,7 +461,7 @@ export default class CopyGnomeExtension extends Extension {
                 value,
             });
         } catch (e) {
-            log.warn(`history head seed skipped: ${e.message}`);
+            log.error('history head seed skipped', e);
         }
     }
 
@@ -458,18 +471,33 @@ export default class CopyGnomeExtension extends Extension {
             log.debug(`[store]: history save ${status}`);
             return status;
         } catch (e) {
-            log.warn(`popup save: ${e.message}`);
+            log.error('popup save', e);
             return 'failed';
         }
     }
 
     _uiConfig() {
-        this._config = loadConfig(this._paths.config, { quiet: true });
-        setLevel(this._config.logging.level);
+        if (!this._configPending && this._work) {
+            const { work, cancel } = readConfigSnapshot(this._paths.config);
+            this._configPending = true;
+            this._work.add('config refresh', work, result => {
+                this._configPending = false;
+                if (!result.value) {
+                    log.warn('config refresh unavailable; keeping cached settings');
+                    return;
+                }
+                const before = this._config.privacy.secretMimes;
+                const after = result.value.privacy.secretMimes;
+                if (before.length !== after.length || before.some((mime, i) => mime !== after[i]))
+                    this._monitor?.discardPendingReads('privacy settings changed');
+                this._config = result.value;
+                setLevel(this._config.logging.level);
+            }, cancel);
+        }
         return this._config.ui;
     }
 
-    async _onCapture(c) {
+    _onCapture(c) {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return;
@@ -580,7 +608,7 @@ export default class CopyGnomeExtension extends Extension {
                 log.debug(`${ctx}: history add recordId=${rec.id} kind=image bytes=${u8.length}`);
             }
         } catch (e) {
-            log.warn(`capture failed: ${e.message}`);
+            log.error('capture failed', e);
         }
     }
 
@@ -595,10 +623,14 @@ export default class CopyGnomeExtension extends Extension {
                 log.warn(`${ctx}: suppressed repeat skipped history touch repeatId=${d.id ?? '(none)'} kind=${d.kind ?? '(none)'} topId=${top?.id ?? '(none)'} topKind=${top?.kind ?? '(none)'} reason=top-mismatch`);
                 return;
             }
+            // The external file offer supersedes the mode of our last write.
+            if (d.kind === 'file')
+                delete top.lastPasteMode;
             this._history.touch(top);
             log.debug(`${ctx}: history touch suppressed-repeat repeatId=${d.id} targetId=${top.id} kind=${top.kind} bytes=${top.bytes} reason=same-last`);
+            return top.id;
         } catch (e) {
-            log.warn(`suppressed repeat handling failed: ${e.message}`);
+            log.error('suppressed repeat handling failed', e);
         }
     }
 
@@ -607,7 +639,7 @@ export default class CopyGnomeExtension extends Extension {
      * clipboard write (or a valid recent-top skip) and the MRU touch both happened.
      * `opts.autoPaste === false` suppresses the auto-paste injection (CLI restores).
      */
-    async _restore(rec, targetWindow = null, opts = {}) {
+    _restore(rec, windowId = null, opts = {}) {
         try {
             if (!this._enabled || !this._monitor || !this._history || !this._store)
                 return false;
@@ -617,6 +649,7 @@ export default class CopyGnomeExtension extends Extension {
                 return false;
             }
             rec = live;
+            const targetWindow = findPasteWindow(windowId);
             const recentTop = this._recentTopRestoreWindow(rec, this._config?.ui?.skipClipboardWriteForRecentTopSec ?? 0);
             // Usually restore writes to the real system clipboard first. The recent row-1
             // shortcut skips only that write; validation, MRU touch, and paste continue.
@@ -628,8 +661,12 @@ export default class CopyGnomeExtension extends Extension {
             // memory echo by matching this type+value. Back up first so a failed write rolls
             // back the marker (see docs/03-clipboard/capture-pipeline.md).
             const backup = this._monitor.getLastContent();
-            const markSelfWrite = (type, value) =>
+            const clipboard = this._monitor.clipboardState;
+            let beforeWrite = null;
+            const markSelfWrite = (type, value) => {
+                beforeWrite = this._monitor.beginClipboardWrite();
                 this._monitor.setLastContent({ origin: 'restore', type, value, sourceKind: 'memory', source: '(self-restore)' });
+            };
             // pasteMode gates the shortcut to confirmed same-mode restores: a rich record's
             // own clipboard write is single-MIME (see Clipboard.setContent), so skipping a
             // write that would actually change mode leaves the clipboard offering the wrong
@@ -642,11 +679,11 @@ export default class CopyGnomeExtension extends Extension {
             const skipWrite = (type, pasteMode = null, unconfirmedOk = false) => {
                 const modeOk = pasteMode == null ||
                     (rec.lastPasteMode == null ? unconfirmedOk : rec.lastPasteMode === pasteMode);
-                const skip = !!recentTop && modeOk;
+                const skip = !!recentTop && modeOk && clipboard.active && clipboard.recordId === rec.id;
                 if (skip) {
                     log.debug(`[restore]: clipboard write skipped recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top row=${recentTop.rowNumber} ageMs=${recentTop.ageMs} windowSec=${recentTop.windowSec}`);
-                } else if (recentTop && pasteMode != null) {
-                    log.debug(`[restore]: clipboard write forced recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top-mode-unconfirmed lastPasteMode=${rec.lastPasteMode ?? '(none)'} pasteMode=${pasteMode}`);
+                } else if (recentTop) {
+                    log.debug(`[restore]: clipboard write forced recordId=${rec.id} kind=${rec.kind} type=${type} reason=recent-top-unconfirmed modeOk=${modeOk}`);
                 }
                 return skip;
             };
@@ -796,6 +833,7 @@ export default class CopyGnomeExtension extends Extension {
 
             if (!this._enabled || !this._history)
                 return false;
+            this._monitor.confirmClipboardWrite(beforeWrite, rec.id);
             // Move the used entry to the front (MRU).
             this._history.touch(rec);
             log.info(`[restore]: restored recordId=${rec.id} kind=${rec.kind} bytes=${rec.bytes}${modeLog}`);
@@ -806,10 +844,10 @@ export default class CopyGnomeExtension extends Extension {
             else if (opts?.autoPaste === false)
                 log.debug(`[paste]: skipped recordId=${rec.id} reason=caller-opt-out`);
             else
-                this._schedulePaste(targetWindow, rec);
+                this._schedulePaste(windowId, this._targetWmClass(targetWindow), rec.id, clipboard);
             return true;
         } catch (e) {
-            log.warn(`restore failed: ${e.message}`);
+            log.error('restore failed', e);
             return false;
         }
     }
@@ -817,70 +855,66 @@ export default class CopyGnomeExtension extends Extension {
     // Save a record to disk via the portal save dialog (docs/07-ui.md); every kind except
     // `file`. The popup has already closed itself; the dialog runs in the portal process,
     // so the Shell only awaits DBus and file IO here.
-    async _saveRecord(rec) {
-        try {
-            if (!this._enabled || !rec || rec.kind === 'file')
-                return;
-            const plan = savePlan(rec);
-            if (!plan) {
-                log.warn(`[save]: skipped recordId=${rec.id ?? '(none)'} kind=${rec.kind ?? '(none)'} reason=no-saveable-payload`);
-                return;
-            }
-            const suggestedName = defaultSaveName(rec.kind, rec.createdAt, plan.extension);
-            log.debug(`[save]: dialog recordId=${rec.id} kind=${rec.kind} mime=${rec.mime} bytes=${plan.bytes.length} suggestedName=${suggestedName}`);
-            const uri = await saveFileDialog({ suggestedName });
-            if (!uri) {
-                log.debug(`[save]: cancelled recordId=${rec.id}`);
-                return;
-            }
-            if (!this._enabled)
-                return;
-            const ok = await writeBytesToUri(uri, plan.bytes);
-            if (!this._enabled)
-                return;
-            if (ok) {
-                log.info(`[save]: saved recordId=${rec.id} kind=${rec.kind} bytes=${plan.bytes.length} uri=${uri}`);
-                this._notifySaved(uri);
-            } else {
-                Main.notify('copy-gnome', 'Save failed - see the journal for [save] lines');
-            }
-        } catch (e) {
-            log.warn(`save record failed: ${e.message}`);
+    _saveRecord(rec) {
+        if (!this._work || !rec || rec.kind === 'file')
+            return;
+        const plan = savePlan(rec);
+        if (!plan) {
+            log.warn(`[save]: skipped recordId=${rec.id ?? '(none)'} reason=no-saveable-payload`);
+            return;
         }
+        const id = rec.id;
+        const suggestedName = defaultSaveName(rec.kind, rec.createdAt, plan.extension);
+        const request = new Gio.Cancellable();
+        log.debug(`[save]: dialog recordId=${id} bytes=${plan.bytes.length}`);
+        this._work.add('save dialog', saveFileDialog({ suggestedName, cancellable: request }), result => {
+            const uri = result.value;
+            if (!uri) {
+                log.debug(`[save]: cancelled recordId=${id}`);
+                return;
+            }
+            this._work.add('save file write', writeBytesToUri(uri, plan.bytes, request), written => {
+                if (written.value) {
+                    log.info(`[save]: saved recordId=${id} bytes=${plan.bytes.length}`);
+                    this._notifySaved(uri);
+                } else {
+                    Main.notify('copy-gnome', 'Save failed - see the journal for [save] lines');
+                }
+            }, () => request.cancel());
+        }, () => request.cancel());
     }
 
     _notifySaved(uri) {
         const body = `Saved: ${uriDisplayPath(uri)}`;
         try {
             const source = this._savedNotificationSource();
-
-            const notification = createNotification(source, 'copy-gnome', body);
-            const show = () => {
-                showInFileManager([uri]).then(shown => {
-                    if (!shown)
-                        Main.notify('copy-gnome', 'Could not open the file manager');
-                });
-            };
-            try {
-                if (typeof notification.addAction === 'function')
-                    notification.addAction('Show in Files', show);
-            } catch (e) {
-                log.debug(`[save]: notification action unavailable: ${e.message}`);
-            }
-            try {
-                if (typeof notification.connect === 'function')
-                    notification.connect('activated', show);
-            } catch (e) {
-                log.debug(`[save]: notification activation unavailable: ${e.message}`);
-            }
-
-            if (typeof source.addNotification === 'function')
+            if (typeof source.addNotification === 'function') {
+                const notification = createNotification(source, 'copy-gnome', body);
+                const runtime = this._work;
+                const show = () => {
+                    if (this._work === runtime)
+                        this._openInFiles([uri]);
+                };
+                try {
+                    notification.addAction?.('Show in Files', show);
+                } catch (error) {
+                    log.debug('[save]: notification action unavailable', error);
+                }
+                try {
+                    notification.connect?.('activated', show);
+                } catch (error) {
+                    log.debug('[save]: notification activation unavailable', error);
+                }
                 source.addNotification(notification);
-            else
-                Main.notify('copy-gnome', body);
-        } catch (e) {
-            log.warn(`[save]: action notification failed: ${e.message}`);
+                return;
+            }
+        } catch (error) {
+            log.error('[save]: action notification failed', error);
+        }
+        try {
             Main.notify('copy-gnome', body);
+        } catch (error) {
+            log.error('[save]: fallback notification failed', error);
         }
     }
 
@@ -893,7 +927,7 @@ export default class CopyGnomeExtension extends Extension {
                         this._notificationSource = null;
                 });
             } catch (e) {
-                log.debug(`[save]: notification source destroy hook unavailable: ${e.message}`);
+                log.debug('[save]: notification source destroy hook unavailable', e);
             }
             Main.messageTray.add(source);
             this._notificationSource = source;
@@ -905,40 +939,42 @@ export default class CopyGnomeExtension extends Extension {
     // popup is still open: all-missing returns {status:'missing'} so the popup shows its
     // inline hint; otherwise the popup is hidden here and the existing uris are revealed
     // in the session file manager.
-    async _revealFile(rec) {
-        try {
-            if (!this._enabled || rec?.kind !== 'file')
-                return { status: 'skipped' };
-            const payload = uriListPayload(rec);
-            const uris = payload
-                ? normalizeUriListForRestore(payload.value).split('\n').filter(Boolean)
-                : [];
-            if (!uris.length) {
-                log.warn(`[reveal]: skipped recordId=${rec.id ?? '(none)'} reason=no-uris`);
-                return { status: 'missing' };
-            }
-            const { existing, missing } = await partitionExistingUris(uris);
-            log.debug(`[reveal]: recordId=${rec.id} uris=${uris.length} existing=${existing.length} missing=${missing.length}`);
-            if (!existing.length) {
-                log.info(`[reveal]: all files missing recordId=${rec.id} uris=${uris.length}`);
-                return { status: 'missing' };
-            }
-            if (!this._enabled)
-                return { status: 'skipped' };
-            this._popup?.hide('reveal');
-            const shown = await showInFileManager(existing);
-            if (!shown) {
-                Main.notify('copy-gnome', 'Could not open the file manager');
-                return { status: 'failed' };
-            }
-            if (missing.length)
-                Main.notify('copy-gnome', `${missing.length} of ${uris.length} files no longer exist`);
-            log.info(`[reveal]: shown recordId=${rec.id} uris=${existing.length}`);
-            return { status: 'shown' };
-        } catch (e) {
-            log.warn(`reveal file failed: ${e.message}`);
-            return { status: 'failed' };
+    _revealFile(rec, view, onMissing) {
+        if (!this._work || rec?.kind !== 'file')
+            return;
+        const payload = uriListPayload(rec);
+        const uris = payload ? normalizeUriListForRestore(payload.value).split('\n').filter(Boolean) : [];
+        const id = rec.id;
+        if (!uris.length) {
+            log.warn(`[reveal]: skipped recordId=${id} reason=no-uris`);
+            onMissing();
+            return;
         }
+        const request = new Gio.Cancellable();
+        view.add('reveal existence checks', partitionExistingUris(uris, request), result => {
+            if (!result.ok)
+                return;
+            const { existing, missing } = result.value;
+            log.debug(`[reveal]: recordId=${id} uris=${uris.length} existing=${existing.length} missing=${missing.length}`);
+            if (!existing.length) {
+                onMissing();
+                return;
+            }
+            this._popup?.hide('reveal');
+            this._openInFiles(existing, missing.length, uris.length);
+        }, () => request.cancel());
+    }
+
+    _openInFiles(uris, missing = 0, total = uris.length) {
+        if (!this._work)
+            return;
+        const request = new Gio.Cancellable();
+        this._work.add('open in Files', showInFileManager(uris, request), result => {
+            if (!result.value)
+                Main.notify('copy-gnome', 'Could not open the file manager');
+            else if (missing)
+                Main.notify('copy-gnome', `${missing} of ${total} files no longer exist`);
+        }, () => request.cancel());
     }
 
     _recentTopRestoreWindow(rec, windowSec) {
@@ -960,41 +996,16 @@ export default class CopyGnomeExtension extends Extension {
         };
     }
 
-    _schedulePaste(targetWindow = null, rec = null) {
-        // Delay so focus has returned to the previous window after the popup closed.
-        const delayMs = Math.max(0, this._config.ui.autoPasteDelayMs ?? 220);
-        log.debug(`[paste]: scheduled recordId=${rec?.id ?? '(none)'} delayMs=${delayMs}`);
-        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
-            this._timers.delete(id);
-            try {
-                if (this._enabled) {
-                    this._restorePasteFocus(targetWindow);
-                    const plan = this._resolvePastePlan();
-                    log.debug(`[paste]: before inject recordId=${rec?.id ?? '(none)'} wm_class="${debugValue(plan.wmClass)}" normalized="${debugValue(plan.normalized)}" keys=${plan.keys.join('+') || '(none)'} reason=${plan.reason} match=${plan.match || '(none)'}`);
-                    const ok = paste(plan.keys, '[paste]');
-                    if (!ok)
-                        log.warn(`[paste]: injection failed recordId=${rec?.id ?? '(none)'} keys=${plan.keys.join('+') || '(none)'} wm_class="${debugValue(plan.wmClass)}"`);
-                }
-            } catch (e) {
-                log.warn(`scheduled paste failed: ${e.message}`);
-            }
-            return GLib.SOURCE_REMOVE;
+    _schedulePaste(windowId, wmClass, recordId, clipboard) {
+        const plan = this._resolvePastePlan(wmClass);
+        log.debug(`[paste]: plan recordId=${recordId} wm_class="${debugValue(plan.wmClass)}" keys=${plan.keys.join('+') || '(none)'} reason=${plan.reason} match=${plan.match || '(none)'}`);
+        schedulePaste(this._timers, clipboard, {
+            windowId,
+            recordId,
+            keys: plan.keys,
+            restoreFocus: this._config.ui.pasteRestoresFocus,
+            delayMs: this._config.ui.autoPasteDelayMs ?? 220,
         });
-        this._timers.add(id);
-    }
-
-    _restorePasteFocus(targetWindow) {
-        if (!this._config?.ui?.pasteRestoresFocus || !targetWindow)
-            return;
-        try {
-            if (targetWindow.minimized)
-                return;
-            const wmClass = this._targetWmClass(targetWindow);
-            log.debug(`[paste]: restoring focus wm_class="${debugValue(wmClass)}"`);
-            targetWindow.activate(global.get_current_time());
-        } catch (e) {
-            log.debug(`paste focus restore skipped: ${e.message}`);
-        }
     }
 
     _targetWmClass(targetWindow = null) {
@@ -1002,7 +1013,7 @@ export default class CopyGnomeExtension extends Extension {
             return targetWindow?.get_wm_class?.() ??
                 global.display.get_focus_window()?.get_wm_class?.() ?? '';
         } catch (e) {
-            log.debug(`target wm_class read failed: ${e.message}`);
+            log.debug('target wm_class read failed', e);
             return '';
         }
     }
@@ -1046,23 +1057,15 @@ export default class CopyGnomeExtension extends Extension {
         return '';
     }
 
-    // Pick the paste keystroke for the currently focused window. There is no semantic
+    // Pick the paste keystroke for the target window. There is no semantic
     // "paste" on Wayland, so this is per-app; the clipboard is already set regardless.
-    _resolvePastePlan() {
+    _resolvePastePlan(wmClass) {
         const fallbackKeys = Array.isArray(this._config?.ui?.defaultPasteKeys)
             ? this._config.ui.defaultPasteKeys
             : ['ctrl', 'v'];
         const fallback = { keys: fallbackKeys, reason: 'default', match: '', wmClass: '', normalized: '' };
         if (!this._config)
             return { ...fallback, reason: 'no-config' };
-        let wmClass = '';
-        try {
-            const win = global.display.get_focus_window();
-            wmClass = win?.get_wm_class?.() ?? '';
-        } catch (e) {
-            log.debug(`[paste]: wm_class read failed: ${e.message}`);
-            return { ...fallback, reason: 'wm-class-error' };
-        }
         const hay = String(wmClass ?? '').toLowerCase();
         if (!hay)
             return { ...fallback, reason: 'no-wm-class', wmClass, normalized: hay };
@@ -1100,7 +1103,7 @@ export default class CopyGnomeExtension extends Extension {
             Get: guard(id => this._ipcGet(id)),
             Use: guard((id, mode) => this._ipcUse(id, mode)),
             CopyText: guard(text => this._ipcCopyText(text)),
-            GetClipboardText: guard(() => this._ipcGetClipboardText()),
+            GetClipboardText: guard(() => clipboardTextReply(this._clipboardReads)),
             Search: guard((query, limit) => this._ipcSearch(query, limit)),
             Remove: guard(id => this._ipcRemove(id)),
             Clear: guard(() => this._ipcClear()),
@@ -1162,7 +1165,7 @@ export default class CopyGnomeExtension extends Extension {
         return { ok: true, item: this._ipcItem(rec, { withPayloads: true }) };
     }
 
-    async _ipcUse(id, mode) {
+    _ipcUse(id, mode) {
         const { rec, error } = this._ipcFind(id);
         if (error)
             return error;
@@ -1171,7 +1174,7 @@ export default class CopyGnomeExtension extends Extension {
             log.debug(`[ipc]: Use rejected recordId=${rec.id} kind=${rec.kind} mode=${explicitMode} reason=mode-kind-mismatch`);
             return { ok: false, code: 'bad-args', error: `mode ${explicitMode} does not apply to kind=${rec.kind}` };
         }
-        const ok = await this._restore(rec, null, { autoPaste: false, mode: explicitMode });
+        const ok = this._restore(rec, null, { autoPaste: false, mode: explicitMode });
         if (!ok)
             return { ok: false, code: 'restore-failed', error: 'restore failed; check the journal for [restore] lines' };
         return { ok: true, id: rec.id, kind: rec.kind };
@@ -1189,6 +1192,7 @@ export default class CopyGnomeExtension extends Extension {
         // Same self-write dance as _restore: mark before writing so the monitor drops the
         // echo, roll the marker back if the write failed.
         const backup = this._monitor.getLastContent();
+        const beforeWrite = this._monitor.beginClipboardWrite();
         this._monitor.setLastContent({ origin: 'restore', type: 'text', value, sourceKind: 'memory', source: '(cli-copy)' });
         if (!Clipboard.setText(value)) {
             this._monitor.setLastContentIfIs(backup);
@@ -1200,13 +1204,9 @@ export default class CopyGnomeExtension extends Extension {
             bytes: size,
             payloads: [makeTextPayload(PLAIN_TEXT_MIME, value, size)],
         });
+        this._monitor.confirmClipboardWrite(beforeWrite, rec.id);
         log.info(`[ipc]: copy recordId=${rec.id} bytes=${size}`);
         return { ok: true, id: rec.id, bytes: size };
-    }
-
-    async _ipcGetClipboardText() {
-        const text = await Clipboard.getText();
-        return { ok: true, hasText: text != null, text: text ?? '' };
     }
 
     _ipcSearch(query, limit) {

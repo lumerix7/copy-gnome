@@ -6,11 +6,11 @@ extension keeps history in memory; disk is a periodically-written durable mirror
 ## Reading Order
 
 | Doc                                         | Topic                                                            |
-|---------------------------------------------|------------------------------------------------------------------|
+| ------------------------------------------- | ---------------------------------------------------------------- |
 | [snapshot-line](snapshot-line.md)           | JSONL snapshot schema, item fields, null/omission rules          |
 | [payloads](payloads.md)                     | Text, files, images/binary, and rich text storage decisions      |
 | [lifecycle](lifecycle.md)                   | Startup, write path, day switching, durability, writer ownership |
-| [cleanup-and-limits](cleanup-and-limits.md) | Retention sweep, caps, prohibited runtime work                  |
+| [cleanup-and-limits](cleanup-and-limits.md) | Retention sweep, caps, prohibited runtime work                   |
 
 
 ## Layout
@@ -50,5 +50,6 @@ rollover logic.
 - No operation replay for item updates.
 - No move/copy/rename of old data on the normal path.
 - Append-only writes are simple; a torn write loses only the last line.
-- A corrupted final line is acceptable; startup begins empty and it can be repaired later.
+- A corrupted final line can be bypassed within the startup recovery budget. Offline
+  repair can inspect the original file.
 - Memory is the source of truth during the session.

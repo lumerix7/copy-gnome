@@ -1,7 +1,8 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import { log } from './log.js';
+import { errorMessage, log } from './log.js';
+import { Completions } from './completions.js';
 
 // DBus control channel for the CLI (docs/14-ipc). Extension logic talks to the thin
 // IpcTransport surface (start(handlers)/stop()); DBusTransport is the default
@@ -44,15 +45,18 @@ function errorEnvelope(code, message) {
 
 // GJS dispatches DBus calls to `<Method>Async(args, invocation)` when present, which lets
 // promise-returning handlers reply without blocking the Shell.
-function buildImpl(handlers) {
+function buildImpl(handlers, work) {
     const impl = {};
     for (const { name } of IPC_METHODS) {
         impl[`${name}Async`] = (params, invocation) => {
+            log.debug(`[ipc]: ${name} started`);
             const finish = envelope => {
                 try {
                     invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(envelope)]));
                 } catch (e) {
-                    log.warn(`[ipc]: ${name} reply failed: ${e.message}`);
+                    log.error(`[ipc]: ${name} reply failed`, e);
+                } finally {
+                    log.debug(`[ipc]: ${name} finished`);
                 }
             };
             try {
@@ -61,20 +65,26 @@ function buildImpl(handlers) {
                     finish(errorEnvelope('not-implemented', `${name} has no handler`));
                     return;
                 }
-                Promise.resolve(handler(...params))
-                    .then(result => {
-                        if (result && typeof result === 'object')
-                            finish(result);
+                const result = handler(...params);
+                const reply = value => {
+                    if (value && typeof value === 'object')
+                        finish(value);
+                    else
+                        finish(errorEnvelope('internal-error', `${name} returned no result`));
+                };
+                if (result instanceof Promise) {
+                    work.add(`[ipc]: ${name}`, result, outcome => {
+                        if (outcome.ok)
+                            reply(outcome.value);
                         else
-                            finish(errorEnvelope('internal-error', `${name} returned no result`));
-                    })
-                    .catch(e => {
-                        log.warn(`[ipc]: ${name} failed: ${e.message}`);
-                        finish(errorEnvelope('internal-error', String(e?.message ?? e)));
-                    });
+                            finish(errorEnvelope('internal-error', outcome.error));
+                    }, () => finish(errorEnvelope('not-ready', 'extension not ready')));
+                } else {
+                    reply(result);
+                }
             } catch (e) {
-                log.warn(`[ipc]: ${name} dispatch failed: ${e.message}`);
-                finish(errorEnvelope('internal-error', String(e?.message ?? e)));
+                log.error(`[ipc]: ${name} dispatch failed`, e);
+                finish(errorEnvelope('internal-error', errorMessage(e)));
             }
         };
     }
@@ -87,22 +97,31 @@ export class DBusTransport {
         this._path = path;
         this._ownerId = 0;
         this._exported = null;
+        this._work = null;
     }
 
     start(handlers) {
         if (this._ownerId)
             return;
+        log.debug('[ipc]: start requested');
         try {
-            const impl = buildImpl(handlers ?? {});
+            const work = new Completions();
+            this._work = work;
+            const impl = buildImpl(handlers ?? {}, work);
             this._ownerId = Gio.bus_own_name(
                 Gio.BusType.SESSION,
                 this._name,
                 Gio.BusNameOwnerFlags.NONE,
-                connection => this._onBusAcquired(connection, impl),
+                connection => {
+                    if (this._work === work)
+                        this._onBusAcquired(connection, impl);
+                },
                 null,
                 () => log.warn(`[ipc]: bus name lost name=${this._name}`));
         } catch (e) {
-            log.warn(`[ipc]: start failed: ${e.message}`);
+            log.error('[ipc]: start failed', e);
+            this._work?.close();
+            this._work = null;
             this._ownerId = 0;
         }
     }
@@ -113,23 +132,28 @@ export class DBusTransport {
             this._exported.export(connection, this._path);
             log.info(`[ipc]: exported name=${this._name} path=${this._path}`);
         } catch (e) {
-            log.warn(`[ipc]: export failed: ${e.message}`);
+            log.error('[ipc]: export failed', e);
             this._exported = null;
         }
     }
 
     stop() {
+        const work = this._work;
+        this._work = null;
+        work?.close();
+        if (this._ownerId || this._exported)
+            log.info('[ipc]: stopping');
         try {
             this._exported?.unexport();
         } catch (e) {
-            log.warn(`[ipc]: unexport failed: ${e.message}`);
+            log.error('[ipc]: unexport failed', e);
         }
         this._exported = null;
         if (this._ownerId) {
             try {
                 Gio.bus_unown_name(this._ownerId);
             } catch (e) {
-                log.warn(`[ipc]: unown name failed: ${e.message}`);
+                log.error('[ipc]: unown name failed', e);
             }
             this._ownerId = 0;
         }
